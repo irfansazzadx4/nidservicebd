@@ -1,20 +1,32 @@
-{
-  "name": "my-wa-bot",
-  "version": "1.0.0",
-  "description": "WhatsApp Bot on Render",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
+
+Action: file_editor create /app/cloudapi-version/package.json --file-text "{
+  \"name\": \"nid-cloudapi-bot\",
+  \"version\": \"2.0.0\",
+  \"description\": \"NID Service WhatsApp Bot - Cloud API Version\",
+  \"main\": \"index.js\",
+  \"scripts\": {
+    \"start\": \"node index.js\"
   },
-  "dependencies": {
-    "@whiskeysockets/baileys": "^6.6.0",
-    "@hapi/boom": "^10.0.1",
-    "axios": "^1.7.0",
-    "form-data": "^4.0.0",
-    "qrcode": "^1.5.3",
-    "pino": "^8.19.0",
-    "puppeteer": "^23.0.0"
+  \"dependencies\": {
+    \"axios\": \"^1.7.2\",
+    \"express\": \"^4.19.2\",
+    \"form-data\": \"^4.0.0\"
   },
-  "author": "Irfan",
-  "license": "ISC"
+  \"engines\": {
+    \"node\": \">=18\"
+  }
 }
+"
+Observation: Create successful: /app/cloudapi-version/package.json
+
+Installing dependencies from package.json
+
+yarn install v1.22.22
+info No lockfile found.
+[1/5] Validating package.json...
+[2/5] Resolving packages...
+[3/5] Fetching packages...
+[4/5] Linking dependencies...
+[5/5] Building fresh packages...
+success Saved lockfile.
+Done in 1.73s.
