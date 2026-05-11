@@ -1,10 +1,9 @@
-
-Action: file_editor create /app/cloudapi-version/index.js --file-text "/**
+/**
  * NID Service Bot - WhatsApp Cloud API Version
  * Migrated from Baileys to Meta Cloud API for 100% ban-free operation
  */
 
-const express = require(\"express\");
+const express = require("express");
 const axios = require(\"axios\");
 const fs = require(\"fs\");
 const path = require(\"path\");
@@ -556,5 +555,3 @@ app.listen(CONFIG.PORT, () => {
 setInterval(() => {
   axios.get(CONFIG.BASE_URL).catch(() => {});
 }, 14 * 60 * 1000);
-"
-Observation: Create successful: /app/cloudapi-version/index.js
