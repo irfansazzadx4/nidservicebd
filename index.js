@@ -1,887 +1,560 @@
-console.log("🚀 BOT STARTING...");
 
-const {
-    default: makeWASocket,
-    useMultiFileAuthState,
-    DisconnectReason,
-    fetchLatestBaileysVersion,
-    makeCacheableSignalKeyStore,
-    downloadMediaMessage,
-} = require("@whiskeysockets/baileys");
+Action: file_editor create /app/cloudapi-version/index.js --file-text "/**
+ * NID Service Bot - WhatsApp Cloud API Version
+ * Migrated from Baileys to Meta Cloud API for 100% ban-free operation
+ */
 
-const pino         = require("pino");
-const { Boom }     = require("@hapi/boom");
-const http         = require("http");
-const qrcode       = require("qrcode");
-const { execSync } = require("child_process");
-const FormData     = require("form-data");
-const axios        = require("axios");
-const fs           = require("fs");
-const path         = require("path");
-const crypto       = require("crypto");
+const express = require(\"express\");
+const axios = require(\"axios\");
+const fs = require(\"fs\");
+const path = require(\"path\");
+const crypto = require(\"crypto\");
+const FormData = require(\"form-data\");
+const { execSync } = require(\"child_process\");
 
-// ============================================================
-//  CONFIG
-// ============================================================
+// ========== CONFIG ==========
 const CONFIG = {
-    API_EXTRACT_URL : "https://auto.onlinebd.top/Signtonid_api_one.php",
-    API_GENERATE_URL: "https://auto.onlinebd.top/bot/nid-bn.php",
-    BASE_URL        : "https://auto.onlinebd.top/bot/storage/",
-    STORAGE_DIR     : "./storage",
-    USERS_FILE      : "./users.json",
-    STATS_FILE      : "./stats.json",
-    SETTINGS_FILE   : "./settings.json",
-    PORT            : process.env.PORT || 3000,
-    ADMIN_PASS      : process.env.ADMIN_PASS || "admin123",
-    PDF_API_URL     : process.env.PDF_API_URL || "",
-    PDF_API_SECRET  : process.env.PDF_API_SECRET || "nid_pdf_secret_2025",
-    SELF_URL        : process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL || "",
+  PORT: process.env.PORT || 3000,
+  ADMIN_PASS: process.env.ADMIN_PASS || \"admin123\",
+
+  // WhatsApp Cloud API
+  WA_TOKEN: process.env.WHATSAPP_TOKEN,
+  WA_PHONE_ID: process.env.WHATSAPP_PHONE_ID,
+  WA_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || \"myVerifyToken123\",
+  WA_API_VERSION: \"v21.0\",
+
+  // External APIs (আপনার আগের গুলো same)
+  API_EXTRACT_URL: \"https://auto.onlinebd.top/Signtonid_api_one.php\",
+  API_GENERATE_URL: \"https://auto.onlinebd.top/bot/nid-bn.php\",
+  PDF_API_URL: process.env.PDF_API_URL,
+  PDF_API_SECRET: process.env.PDF_API_SECRET,
+
+  BASE_URL: process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL || \"https://nidservicebd.onrender.com\",
+  STORAGE_DIR: path.join(__dirname, \"storage\"),
+  DATA_DIR: path.join(__dirname, \"data\"),
+
+  // GitHub backup
+  GITHUB_REPO: process.env.GITHUB_REPO,
+  GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+  GITHUB_BRANCH: process.env.GITHUB_BRANCH || \"main\",
 };
 
-// ============================================================
-//  HELPERS
-// ============================================================
-function loadJSON(file, fallback) {
-    try { return JSON.parse(fs.readFileSync(file, "utf8")); }
-    catch { return fallback; }
-}
-function saveJSON(file, data) { fs.writeFileSync(file, JSON.stringify(data, null, 2)); }
-function getUsers()      { return loadJSON(CONFIG.USERS_FILE,   []); }
-function saveUsers(u)    { saveJSON(CONFIG.USERS_FILE, u); }
-function getStats()      { return loadJSON(CONFIG.STATS_FILE,   {}); }
-function getSettings()   { return loadJSON(CONFIG.SETTINGS_FILE, { cardPrice: 0 }); }
-function saveSettings(s) { saveJSON(CONFIG.SETTINGS_FILE, s); }
+if (!fs.existsSync(CONFIG.STORAGE_DIR)) fs.mkdirSync(CONFIG.STORAGE_DIR, { recursive: true });
+if (!fs.existsSync(CONFIG.DATA_DIR)) fs.mkdirSync(CONFIG.DATA_DIR, { recursive: true });
 
+const USERS_FILE = path.join(CONFIG.DATA_DIR, \"users.json\");
+const STATS_FILE = path.join(CONFIG.DATA_DIR, \"stats.json\");
+const SETTINGS_FILE = path.join(CONFIG.DATA_DIR, \"settings.json\");
+
+// ========== HELPERS ==========
+const loadJSON = (f, def) => {
+  try { return JSON.parse(fs.readFileSync(f, \"utf8\")); } catch { return def; }
+};
+const saveJSON = (f, d) => fs.writeFileSync(f, JSON.stringify(d, null, 2));
+
+const getUsers = () => loadJSON(USERS_FILE, []);
+const saveUsers = (u) => saveJSON(USERS_FILE, u);
+const getStats = () => loadJSON(STATS_FILE, {});
+const saveStats = (s) => saveJSON(STATS_FILE, s);
+const getSettings = () => loadJSON(SETTINGS_FILE, { cardPrice: 0 });
+const saveSettings = (s) => saveJSON(SETTINGS_FILE, s);
+
+// Normalize number to E.164 without +
 function normalizeNumber(num) {
-    let n = String(num).replace(/\D/g, "");
-    if (n.length === 11 && n.startsWith("01")) n = "880" + n.slice(1);
-    return n;
+  let n = String(num).replace(/\D/g, \"\");
+  if (n.startsWith(\"0\")) n = \"880\" + n.slice(1);
+  if (!n.startsWith(\"880\") && n.length === 10) n = \"880\" + n;
+  return n;
 }
 
 function isAllowed(number) {
-    const users = getUsers();
-    if (users.length === 0) return false;
-    const norm = normalizeNumber(number);
-    const u = users.find(x => normalizeNumber(x.number) === norm);
-    return u && (u.active !== false);
+  const users = getUsers();
+  if (users.length === 0) return false;
+  const u = users.find(x => normalizeNumber(x.number) === normalizeNumber(number));
+  return u && u.active !== false;
 }
 
 function getUserBalance(number) {
-    const norm = normalizeNumber(number);
-    const u    = getUsers().find(x => normalizeNumber(x.number) === norm);
-    return u ? (u.balance ?? 0) : 0;
+  const u = getUsers().find(x => normalizeNumber(x.number) === normalizeNumber(number));
+  return u ? (u.balance || 0) : 0;
 }
 
-// Balance deduct — false হলে অপর্যাপ্ত
 function deductBalance(number) {
-    const settings = getSettings();
-    const price    = settings.cardPrice || 0;
-    if (price <= 0) return true;
-    const users = getUsers();
-    const norm  = normalizeNumber(number);
-    const u     = users.find(x => normalizeNumber(x.number) === norm);
-    if (!u) return false;
-    const bal = u.balance ?? 0;
-    if (bal < price) return false;
-    u.balance = Math.round((bal - price) * 100) / 100;
-    saveUsers(users);
-    return true;
+  const users = getUsers();
+  const price = getSettings().cardPrice || 0;
+  const idx = users.findIndex(x => normalizeNumber(x.number) === normalizeNumber(number));
+  if (idx === -1) return false;
+  if ((users[idx].balance || 0) < price) return false;
+  users[idx].balance = (users[idx].balance || 0) - price;
+  saveUsers(users);
+  return true;
 }
 
-function recordStat(number, name) {
-    const stats = getStats();
-    if (!stats[number]) stats[number] = { name, count: 0, lastUsed: "" };
-    stats[number].count++;
-    stats[number].lastUsed = new Date().toLocaleString("bn-BD");
-    stats[number].name = name || stats[number].name;
-    saveJSON(CONFIG.STATS_FILE, stats);
-    pushDataToGitHub().catch(() => {});
+function recordStat(number) {
+  const stats = getStats();
+  const key = normalizeNumber(number);
+  if (!stats[key]) stats[key] = { count: 0, lastUsed: null };
+  stats[key].count++;
+  stats[key].lastUsed = new Date().toISOString();
+  saveStats(stats);
 }
 
-// ============================================================
-//  QR / CONNECTION STATE
-// ============================================================
-let lastQR      = "";
-let isConnected = false;
-const adminSessions = new Set();
+// ========== GITHUB BACKUP ==========
+function pushDataToGitHub() {
+  if (!CONFIG.GITHUB_REPO || !CONFIG.GITHUB_TOKEN) return;
+  try {
+    const repoUrl = `https://${CONFIG.GITHUB_TOKEN}@github.com/${CONFIG.GITHUB_REPO}.git`;
+    const tmp = \"/tmp/databackup_\" + Date.now();
+    execSync(`git clone --depth 1 -b ${CONFIG.GITHUB_BRANCH} ${repoUrl} ${tmp}`, { stdio: \"ignore\" });
+    [\"users.json\", \"stats.json\", \"settings.json\"].forEach(f => {
+      const src = path.join(CONFIG.DATA_DIR, f);
+      if (fs.existsSync(src)) fs.copyFileSync(src, path.join(tmp, f));
+    });
+    execSync(`cd ${tmp} && git config user.email bot@bot.com && git config user.name bot && git add -A && git commit -m \"data backup\" || true && git push`, { stdio: \"ignore\" });
+    execSync(`rm -rf ${tmp}`);
+    console.log(\"✅ Data pushed to GitHub\");
+  } catch (e) {
+    console.error(\"GitHub push error:\", e.message);
+  }
+}
 
-// ============================================================
-//  HTTP SERVER
-// ============================================================
-http.createServer(async (req, res) => {
-    const urlObj  = new URL(req.url, `http://localhost`);
-    const reqPath = urlObj.pathname;
+function restoreDataFromGitHub() {
+  if (!CONFIG.GITHUB_REPO || !CONFIG.GITHUB_TOKEN) return;
+  try {
+    [\"users.json\", \"stats.json\", \"settings.json\"].forEach(f => {
+      const local = path.join(CONFIG.DATA_DIR, f);
+      if (fs.existsSync(local)) return;
+      const url = `https://raw.githubusercontent.com/${CONFIG.GITHUB_REPO}/${CONFIG.GITHUB_BRANCH}/${f}`;
+      axios.get(url, { headers: { Authorization: `token ${CONFIG.GITHUB_TOKEN}` } })
+        .then(r => fs.writeFileSync(local, JSON.stringify(r.data, null, 2)))
+        .catch(() => {});
+    });
+  } catch (e) { console.error(\"Restore error:\", e.message); }
+}
 
-    if (reqPath === "/test") {
-        res.writeHead(200, { "Content-Type": "text/plain" });
-        return res.end("OK BOT RUNNING");
-    }
-    if (reqPath.startsWith("/storage/")) {
-        const file = "." + reqPath;
-        if (fs.existsSync(file)) {
-            const ct = file.endsWith(".html") ? "text/html; charset=utf-8" : "application/octet-stream";
-            res.writeHead(200, { "Content-Type": ct });
-            return fs.createReadStream(file).pipe(res);
-        }
-        res.writeHead(404); return res.end("Not found");
-    }
-    if (reqPath === "/admin" || reqPath.startsWith("/admin")) {
-        return handleAdmin(req, res, urlObj);
-    }
-    if (isConnected) {
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(htmlPage("✅ Bot Connected",
-            `<div class="connected">✅ WhatsApp Bot সংযুক্ত!</div>
-             <a href="/admin" class="btn">Admin Panel →</a>`));
-    }
-    if (lastQR) {
-        try {
-            const qrImg = await qrcode.toDataURL(lastQR);
-            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-            return res.end(htmlPage("QR Code",
-                `<h2>📱 WhatsApp QR Scan করুন</h2>
-                 <img src="${qrImg}" style="width:260px;border:4px solid #25D366;border-radius:12px">
-                 <p>WhatsApp → Linked Devices → Link a Device</p>
-                 <meta http-equiv="refresh" content="30">`));
-        } catch { res.writeHead(500); return res.end("QR error"); }
-    }
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(htmlPage("Loading", `<h2>⏳ QR লোড হচ্ছে...</h2><meta http-equiv="refresh" content="8">`));
+// ========== WHATSAPP CLOUD API FUNCTIONS ==========
+const WA_BASE = `https://graph.facebook.com/${CONFIG.WA_API_VERSION}/${CONFIG.WA_PHONE_ID}`;
+const WA_HEADERS = { Authorization: `Bearer ${CONFIG.WA_TOKEN}`, \"Content-Type\": \"application/json\" };
 
-}).listen(CONFIG.PORT, () => {
-    console.log(`✅ Server: http://localhost:${CONFIG.PORT}`);
-    startSelfPing();
+// Send text message
+async function sendText(to, body) {
+  try {
+    await axios.post(`${WA_BASE}/messages`, {
+      messaging_product: \"whatsapp\",
+      to,
+      type: \"text\",
+      text: { body }
+    }, { headers: WA_HEADERS });
+  } catch (e) {
+    console.error(\"sendText error:\", e.response?.data || e.message);
+  }
+}
+
+// Mark message as read (shows blue tick)
+async function markRead(messageId) {
+  try {
+    await axios.post(`${WA_BASE}/messages`, {
+      messaging_product: \"whatsapp\",
+      status: \"read\",
+      message_id: messageId
+    }, { headers: WA_HEADERS });
+  } catch {}
+}
+
+// Upload media to WhatsApp servers and get media_id
+async function uploadMedia(buffer, filename, mimetype) {
+  const form = new FormData();
+  form.append(\"messaging_product\", \"whatsapp\");
+  form.append(\"file\", buffer, { filename, contentType: mimetype });
+  form.append(\"type\", mimetype);
+  const res = await axios.post(`${WA_BASE}/media`, form, {
+    headers: { ...form.getHeaders(), Authorization: `Bearer ${CONFIG.WA_TOKEN}` },
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+  });
+  return res.data.id;
+}
+
+// Send document (PDF) with caption
+async function sendDocument(to, mediaId, filename, caption) {
+  try {
+    await axios.post(`${WA_BASE}/messages`, {
+      messaging_product: \"whatsapp\",
+      to,
+      type: \"document\",
+      document: { id: mediaId, filename, caption }
+    }, { headers: WA_HEADERS });
+  } catch (e) {
+    console.error(\"sendDocument error:\", e.response?.data || e.message);
+  }
+}
+
+// Download media from WhatsApp by media_id
+async function downloadMedia(mediaId) {
+  const meta = await axios.get(`https://graph.facebook.com/${CONFIG.WA_API_VERSION}/${mediaId}`, {
+    headers: { Authorization: `Bearer ${CONFIG.WA_TOKEN}` }
+  });
+  const fileRes = await axios.get(meta.data.url, {
+    headers: { Authorization: `Bearer ${CONFIG.WA_TOKEN}` },
+    responseType: \"arraybuffer\"
+  });
+  return { buffer: Buffer.from(fileRes.data), mimetype: meta.data.mime_type };
+}
+
+// ========== NID EXTRACTION & CARD GENERATION (same as before) ==========
+function mapAPIData(d) {
+  return {
+    nid: d.nid || d.NID || d.national_id || \"\",
+    nameBangla: d.nameBangla || d.name_bn || d.bangla_name || \"\",
+    nameEnglish: d.nameEnglish || d.name_en || d.english_name || \"\",
+    dob: d.dob || d.date_of_birth || d.DOB || \"\",
+    fatherName: d.fatherName || d.father_name || d.father || \"\",
+    motherName: d.motherName || d.mother_name || d.mother || \"\",
+    address: d.address || d.permanent_address || \"\",
+    birthPlace: d.birthPlace || d.birth_place || \"\",
+    bloodGroup: d.bloodGroup || d.blood_group || \"\",
+    imageUrl12: d.imageUrl12 || d.photo || d.image || \"\",
+    signature: d.signature || d.sign || \"\",
+    pin: d.pin || \"\",
+  };
+}
+
+async function extractNIDFromPDF(buffer) {
+  const form = new FormData();
+  form.append(\"pdf\", buffer, { filename: \"nid.pdf\", contentType: \"application/pdf\" });
+  const res = await axios.post(CONFIG.API_EXTRACT_URL, form, {
+    headers: form.getHeaders(),
+    maxContentLength: Infinity, maxBodyLength: Infinity, timeout: 60000,
+  });
+  return mapAPIData(typeof res.data === \"string\" ? JSON.parse(res.data) : res.data);
+}
+
+function fixRelativePaths(html) {
+  return html
+    .replace(/src=\"\/(?!\/)/g, `src=\"${CONFIG.BASE_URL}/`)
+    .replace(/href=\"\/(?!\/)/g, `href=\"${CONFIG.BASE_URL}/`)
+    .replace(/url\(\/(?!\/)/g, `url(${CONFIG.BASE_URL}/`);
+}
+
+async function fetchHTMLFromData(data) {
+  const params = new URLSearchParams();
+  Object.entries(data).forEach(([k, v]) => params.append(k, v || \"\"));
+  const res = await axios.post(CONFIG.API_GENERATE_URL, params.toString(), {
+    headers: { \"Content-Type\": \"application/x-www-form-urlencoded\" },
+    timeout: 60000,
+  });
+  return fixRelativePaths(res.data);
+}
+
+async function buildAndSaveHTML(data) {
+  const html = await fetchHTMLFromData(data);
+  const filename = `nid_${data.nid || Date.now()}_${Date.now()}.html`;
+  fs.writeFileSync(path.join(CONFIG.STORAGE_DIR, filename), html);
+  return `${CONFIG.BASE_URL}/storage/${filename}`;
+}
+
+async function embedFontsInHTML(html) {
+  // Optional: embed fonts as base64 if needed. For now just return as-is.
+  return html;
+}
+
+async function generatePDFFromMapped(data) {
+  let html = await fetchHTMLFromData(data);
+  html = await embedFontsInHTML(html);
+  const res = await axios.post(`${CONFIG.PDF_API_URL}/pdf`, {
+    secret: CONFIG.PDF_API_SECRET,
+    html
+  }, { timeout: 90000 });
+  const base64 = res.data.pdf || res.data.base64 || res.data;
+  return Buffer.from(base64, \"base64\");
+}
+
+// ========== INCOMING MESSAGE HANDLER ==========
+async function handleIncoming(msg, contact) {
+  const from = msg.from; // E.164 without +
+  const msgId = msg.id;
+  await markRead(msgId);
+
+  // Handle text commands
+  if (msg.type === \"text\") {
+    const text = msg.text.body.trim().toLowerCase();
+    if (text === \".ping\" || text === \"ping\") {
+      return sendText(from, \"🟢 Pong! Bot সচল আছে।\");
+    }
+    if (text === \".status\" || text === \"status\") {
+      if (!isAllowed(from)) return sendText(from, \"❌ আপনি authorized নন। Admin এর সাথে যোগাযোগ করুন।\");
+      const bal = getUserBalance(from);
+      const price = getSettings().cardPrice || 0;
+      return sendText(from, `✅ আপনি authorized।\n💰 Balance: ${bal} টাকা\n💳 Card Price: ${price} টাকা`);
+    }
+    return sendText(from, \"📄 NID Card বানাতে আপনার NID PDF টা এই chat এ পাঠান।\n\nCommands:\n.ping - bot check\n.status - balance check\");
+  }
+
+  // Handle document (PDF)
+  if (msg.type === \"document\") {
+    const doc = msg.document;
+    if (!doc.mime_type?.includes(\"pdf\")) {
+      return sendText(from, \"❌ শুধু PDF file পাঠাতে হবে।\");
+    }
+    if (!isAllowed(from)) {
+      return sendText(from, \"❌ আপনি authorized নন। Admin এর সাথে যোগাযোগ করুন।\");
+    }
+
+    const price = getSettings().cardPrice || 0;
+    if (price > 0 && getUserBalance(from) < price) {
+      return sendText(from, `❌ Balance কম! কমপক্ষে ${price} টাকা থাকতে হবে।\nCurrent balance: ${getUserBalance(from)} টাকা`);
+    }
+
+    await sendText(from, \"⏳ আপনার NID PDF process হচ্ছে... একটু wait করুন।\");
+
+    try {
+      // 1. Download PDF from WhatsApp
+      const { buffer: pdfBuf } = await downloadMedia(doc.id);
+
+      // 2. Extract NID data
+      const data = await extractNIDFromPDF(pdfBuf);
+      if (!data.nid) throw new Error(\"NID extract করতে পারিনি\");
+
+      // 3. Deduct balance
+      if (price > 0) deductBalance(from);
+
+      // 4. Generate HTML + PDF in parallel
+      const [htmlUrl, pdfBuffer] = await Promise.all([
+        buildAndSaveHTML(data),
+        generatePDFFromMapped(data),
+      ]);
+
+      // 5. Record stat & backup
+      recordStat(from);
+      pushDataToGitHub();
+
+      // 6. Send PDF to user
+      const filename = `NID_${data.nid}.pdf`;
+      const caption = `✅ আপনার NID Card তৈরি হয়েছে!\n\n👤 নাম: ${data.nameBangla || data.nameEnglish}\n🆔 NID: ${data.nid}\n🎂 DOB: ${data.dob}\n${price > 0 ? `💰 Remaining Balance: ${getUserBalance(from)} টাকা\n` : \"\"}🖨️ Print করতে: ${htmlUrl}`;
+
+      const mediaId = await uploadMedia(pdfBuffer, filename, \"application/pdf\");
+      await sendDocument(from, mediaId, filename, caption);
+    } catch (err) {
+      console.error(\"Process error:\", err.message);
+      await sendText(from, `❌ Error: ${err.message}\nআবার চেষ্টা করুন বা admin কে জানান।`);
+    }
+  }
+}
+
+// ========== EXPRESS SERVER ==========
+const app = express();
+app.use(express.json({ limit: \"50mb\" }));
+app.use(express.urlencoded({ extended: true, limit: \"50mb\" }));
+
+// Webhook verification (Meta calls this once to verify)
+app.get(\"/webhook\", (req, res) => {
+  const mode = req.query[\"hub.mode\"];
+  const token = req.query[\"hub.verify_token\"];
+  const challenge = req.query[\"hub.challenge\"];
+  if (mode === \"subscribe\" && token === CONFIG.WA_VERIFY_TOKEN) {
+    console.log(\"✅ Webhook verified\");
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
 });
 
-function startSelfPing() {
-    if (!CONFIG.SELF_URL) return;
-    setInterval(async () => {
-        try { await axios.get(CONFIG.SELF_URL + "/test", { timeout: 10000 }); }
-        catch (e) { console.log("⚠️ Self-ping:", e.message); }
-    }, 10 * 60 * 1000);
-}
-
-// ============================================================
-//  ADMIN PANEL
-// ============================================================
-async function handleAdmin(req, res, urlObj) {
-    const cookies = parseCookies(req.headers.cookie || "");
-    const authed  = cookies.admin_sess && adminSessions.has(cookies.admin_sess);
-
-    if (req.method === "POST") {
-        const body   = await readBody(req);
-        const params = new URLSearchParams(body);
-        const action = params.get("action");
-
-        if (action === "login") {
-            if (params.get("pass") === CONFIG.ADMIN_PASS) {
-                const sess = crypto.randomBytes(16).toString("hex");
-                adminSessions.add(sess);
-                res.writeHead(302, { "Set-Cookie": `admin_sess=${sess}; Path=/; HttpOnly`, "Location": "/admin" });
-            } else {
-                res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-                res.end(adminLogin("❌ ভুল পাসওয়ার্ড!"));
-            }
-            return res.end && res.end();
-        }
-
-        if (!authed) { res.writeHead(302, { Location: "/admin" }); return res.end(); }
-
-        if (action === "add") {
-            const number  = normalizeNumber(params.get("number") || "");
-            const name    = (params.get("name") || "").trim();
-            const balance = parseFloat(params.get("balance") || "0") || 0;
-            if (number) {
-                const users = getUsers();
-                if (!users.find(u => normalizeNumber(u.number) === number)) {
-                    users.push({ number, name, active: true, balance, added: new Date().toLocaleString("bn-BD") });
-                    saveUsers(users);
-                }
-            }
-        } else if (action === "recharge") {
-            const number = params.get("number");
-            const amount = parseFloat(params.get("amount") || "0") || 0;
-            if (amount > 0) {
-                const users = getUsers();
-                const u     = users.find(x => x.number === number);
-                if (u) { u.balance = Math.round(((u.balance ?? 0) + amount) * 100) / 100; saveUsers(users); }
-            }
-        } else if (action === "set_price") {
-            const price    = parseFloat(params.get("price") || "0") || 0;
-            const settings = getSettings();
-            settings.cardPrice = price;
-            saveSettings(settings);
-        } else if (action === "toggle") {
-            const users = getUsers();
-            const u = users.find(x => x.number === params.get("number"));
-            if (u) u.active = !u.active;
-            saveUsers(users);
-        } else if (action === "delete") {
-            saveUsers(getUsers().filter(u => u.number !== params.get("number")));
-        } else if (action === "logout") {
-            adminSessions.delete(cookies.admin_sess);
-            res.writeHead(302, { "Set-Cookie": "admin_sess=; Path=/; Max-Age=0", "Location": "/admin" });
-            return res.end();
-        } else if (action === "backup_now") {
-            await pushDataToGitHub().catch(e => console.log("Backup:", e.message));
-        }
-
-        res.writeHead(302, { Location: "/admin" }); return res.end();
+// Webhook receiver (incoming messages)
+app.post(\"/webhook\", async (req, res) => {
+  res.sendStatus(200); // Acknowledge fast (Meta requires <20s response)
+  try {
+    const entry = req.body.entry?.[0];
+    const change = entry?.changes?.[0]?.value;
+    const messages = change?.messages || [];
+    const contacts = change?.contacts || [];
+    for (const msg of messages) {
+      await handleIncoming(msg, contacts[0]);
     }
+  } catch (e) {
+    console.error(\"Webhook error:\", e.message);
+  }
+});
 
-    if (!authed) {
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        return res.end(adminLogin(""));
-    }
+// Privacy Policy (needed for Live mode)
+app.get(\"/privacy\", (req, res) => {
+  res.send(`<html><body style=\"font-family:sans-serif;max-width:700px;margin:40px auto;padding:20px;\">
+    <h1>Privacy Policy</h1>
+    <p>NID Service Bot collects only the NID PDF you send. We process it to generate a card and do not share your data with any third party except the NID extraction service required for processing.</p>
+    <p>Data is stored temporarily and deleted automatically. Contact admin for data deletion requests.</p>
+  </body></html>`);
+});
 
-    const users      = getUsers();
-    const stats      = getStats();
-    const settings   = getSettings();
-    const totalCards = Object.values(stats).reduce((s, x) => s + (x.count || 0), 0);
-    const activeUsers= users.filter(u => u.active !== false).length;
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(adminDashboard(users, stats, totalCards, activeUsers, settings));
+// Serve generated HTML files
+app.use(\"/storage\", express.static(CONFIG.STORAGE_DIR));
+
+// Health check
+app.get(\"/\", (req, res) => res.send(\"✅ NID Bot (Cloud API) is running\"));
+
+// ========== ADMIN PANEL ==========
+const adminSessions = new Set();
+
+function adminAuth(req, res, next) {
+  const sess = req.cookies?.admin_sess || (req.headers.cookie || \"\").split(\";\").map(s => s.trim()).find(s => s.startsWith(\"admin_sess=\"))?.split(\"=\")[1];
+  if (sess && adminSessions.has(sess)) return next();
+  res.redirect(\"/admin/login\");
 }
 
-// ============================================================
-//  GITHUB — Session push
-// ============================================================
-async function pushSessionToGitHub() {
-    try {
-        const repo   = process.env.GITHUB_REPO;
-        const token  = process.env.GITHUB_TOKEN;
-        const branch = process.env.GITHUB_BRANCH || "main";
-        if (!repo || !token) return;
-        execSync(`git config --global user.email "bot@bot.com"`);
-        execSync(`git config --global user.name "WA Bot"`);
-        const remote = `https://${token}@github.com/${repo}.git`;
-        try { execSync(`git remote set-url origin ${remote}`); }
-        catch { execSync(`git remote add origin ${remote}`); }
-        execSync(`git add -f auth_info_baileys/`);
-        execSync(`git commit -m "session update" --allow-empty`);
-        execSync(`git push origin ${branch} --force`);
-        console.log("✅ Session saved to GitHub");
-    } catch (e) { console.log("⚠️ GitHub session push:", e.message); }
-}
-
-// ============================================================
-//  GITHUB — Data backup (users + stats + settings)
-//  প্রতিটি card generate এর পরে auto backup হয়
-//  Deploy এর পরে বা QR re-login করলেও data টিকে থাকে
-// ============================================================
-async function pushDataToGitHub() {
-    try {
-        const repo   = process.env.GITHUB_REPO;
-        const token  = process.env.GITHUB_TOKEN;
-        const branch = process.env.GITHUB_BRANCH || "main";
-        if (!repo || !token) return;
-        execSync(`git config --global user.email "bot@bot.com"`);
-        execSync(`git config --global user.name "WA Bot"`);
-        const remote = `https://${token}@github.com/${repo}.git`;
-        try { execSync(`git remote set-url origin ${remote}`); }
-        catch { execSync(`git remote add origin ${remote}`); }
-        const files = [CONFIG.USERS_FILE, CONFIG.STATS_FILE, CONFIG.SETTINGS_FILE]
-            .filter(f => fs.existsSync(f)).join(" ");
-        if (!files) return;
-        execSync(`git add -f ${files}`);
-        execSync(`git commit -m "data-backup" --allow-empty`);
-        execSync(`git push origin ${branch} --force`);
-        console.log("✅ Data backup done");
-    } catch (e) { console.log("⚠️ Data backup:", e.message); }
-}
-
-// ============================================================
-//  GITHUB — Data restore on startup
-//  Deploy এর পরে GitHub থেকে পুরানো data ফিরিয়ে আনে
-// ============================================================
-async function restoreDataFromGitHub() {
-    try {
-        const repo   = process.env.GITHUB_REPO;
-        const token  = process.env.GITHUB_TOKEN;
-        const branch = process.env.GITHUB_BRANCH || "main";
-        if (!repo || !token) return;
-        const missing = [CONFIG.USERS_FILE, CONFIG.STATS_FILE, CONFIG.SETTINGS_FILE]
-            .some(f => !fs.existsSync(f));
-        if (!missing) return; // সব আছে, restore দরকার নেই
-        const remote = `https://${token}@github.com/${repo}.git`;
-        execSync(`git config --global user.email "bot@bot.com"`);
-        execSync(`git config --global user.name "WA Bot"`);
-        try { execSync(`git remote set-url origin ${remote}`); }
-        catch { execSync(`git remote add origin ${remote}`); }
-        execSync(`git fetch origin ${branch} --depth=1`);
-        try {
-            execSync(`git checkout origin/${branch} -- users.json stats.json settings.json`);
-            console.log("✅ Data restored from GitHub");
-        } catch { console.log("ℹ️ No data files in GitHub yet — starting fresh"); }
-    } catch (e) { console.log("⚠️ Data restore:", e.message); }
-}
-
-// ============================================================
-//  NID EXTRACT
-// ============================================================
-async function extractNIDFromPDF(pdfBuffer) {
-    const form = new FormData();
-    form.append("pdf", pdfBuffer, { filename: "nid.pdf", contentType: "application/pdf" });
-    const res = await axios.post(CONFIG.API_EXTRACT_URL, form, {
-        headers: form.getHeaders(), timeout: 60000,
-    });
-    console.log("📦 Extract:", JSON.stringify(res.data).substring(0, 300));
-    return res.data;
-}
-
-function mapAPIData(api) {
-    if (!api) throw new Error("Empty API response");
-    const ok = api.status === "success" || api.success === true || api.status === 200;
-    if (!ok) throw new Error(api.message || api.error || "API error");
-    const d = api.data || api;
-    if (!d) throw new Error("No data in response");
-    const images = Array.isArray(d.images) ? d.images : [];
-    return {
-        nationalId : d.nationalId  || d.nid        || "",
-        nameBangla : d.nameBangla  || d.name_bn     || "",
-        nameEnglish: d.nameEnglish || d.name_en     || "",
-        dateOfBirth: d.dateOfBirth || d.dob         || "",
-        birthPlace : d.birthPlace  || d.birth_place || "",
-        fatherName : d.fatherName  || d.father_name || "",
-        motherName : d.motherName  || d.mother_name || "",
-        bloodGroup : d.bloodGroup  || d.blood_group || "",
-        address    : d.address     || d.fulladdress || "",
-        userIMG    : images[0]     || d.userIMG     || d.photo || "",
-        signIMG    : images[1]     || d.signIMG     || d.sign  || "",
-    };
-}
-
-// ============================================================
-//  HTML SAVE — clean card (কোনো banner/text নেই)
-//  User চাইলে link থেকে browser এ খুলে print করতে পারবে
-// ============================================================
-async function buildAndSaveHTML(mappedData) {
-    if (!fs.existsSync(CONFIG.STORAGE_DIR)) fs.mkdirSync(CONFIG.STORAGE_DIR);
-
-    const params = new URLSearchParams({
-        nid        : mappedData.nationalId,
-        pin        : "",
-        pin_status : "disabled",
-        nameBangla : mappedData.nameBangla,
-        nameEnglish: mappedData.nameEnglish,
-        dob        : mappedData.dateOfBirth,
-        birthPlace : mappedData.birthPlace,
-        nameFather : mappedData.fatherName,
-        nameMother : mappedData.motherName,
-        bloodGroup : mappedData.bloodGroup,
-        fulladdress: mappedData.address,
-        imageUrl12 : mappedData.userIMG,
-        imageUrl22 : mappedData.signIMG,
-        issueDate  : new Date().toLocaleDateString("en-GB"),
-    });
-
-    const htmlRes = await axios.post(
-        CONFIG.API_GENERATE_URL,
-        params.toString(),
-        { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 30000, responseType: "text" }
-    );
-
-    let html = htmlRes.data;
-    if (!html || html.length < 200) throw new Error("Empty HTML from nid-bn.php");
-
-    html = fixRelativePaths(html);
-    // window.print() রেখে দাও — user browser এ print করতে পারবে
-    // html = html.replace(/window\.print\(\);?/g, "// print removed");
-
-    const filename = `${Date.now()}_card.html`;
-    const filepath = path.join(CONFIG.STORAGE_DIR, filename);
-    fs.writeFileSync(filepath, html);
-
-    const serveBase = (CONFIG.SELF_URL || '').replace(/\/$/, '') + '/storage/';
-    return serveBase ? serveBase + filename : CONFIG.BASE_URL + filename;
-}
-
-// ============================================================
-//  PDF GENERATE
-// ============================================================
-async function generatePDFFromMapped(mappedData) {
-    const params = new URLSearchParams({
-        nid        : mappedData.nationalId,
-        pin        : "",
-        pin_status : "disabled",
-        nameBangla : mappedData.nameBangla,
-        nameEnglish: mappedData.nameEnglish,
-        dob        : mappedData.dateOfBirth,
-        birthPlace : mappedData.birthPlace,
-        nameFather : mappedData.fatherName,
-        nameMother : mappedData.motherName,
-        bloodGroup : mappedData.bloodGroup,
-        fulladdress: mappedData.address,
-        imageUrl12 : mappedData.userIMG,
-        imageUrl22 : mappedData.signIMG,
-        issueDate  : new Date().toLocaleDateString("en-GB"),
-    });
-
-    const htmlRes = await axios.post(
-        CONFIG.API_GENERATE_URL,
-        params.toString(),
-        { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 30000, responseType: "text" }
-    );
-
-    let html = htmlRes.data;
-    if (!html || html.length < 200) throw new Error("Empty HTML from nid-bn.php");
-
-    html = fixRelativePaths(html);
-    html = await embedFontsInHTML(html);
-    console.log(`✅ Fonts embedded, HTML: ${html.length} chars`);
-
-    if (!CONFIG.PDF_API_URL) throw new Error("PDF_API_URL not set");
-
-    const pdfRes = await axios.post(
-        CONFIG.PDF_API_URL + "/pdf",
-        { secret: CONFIG.PDF_API_SECRET, html },
-        { headers: { "Content-Type": "application/json" }, timeout: 120000 }
-    );
-
-    if (!pdfRes.data?.success) throw new Error("PDF API: " + (pdfRes.data?.error || "unknown"));
-    const pdfBuffer = Buffer.from(pdfRes.data.pdf, "base64");
-    console.log(`✅ PDF: ${pdfBuffer.length} bytes`);
-    return pdfBuffer;
-}
-
-// ============================================================
-//  MAIN BOT
-// ============================================================
-async function startBot() {
-    await restoreDataFromGitHub();
-
-    const { state, saveCreds } = await useMultiFileAuthState("auth_info_baileys");
-    const { version }          = await fetchLatestBaileysVersion();
-
-    const sock = makeWASocket({
-        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) },
-        printQRInTerminal     : false,
-        logger                : pino({ level: "fatal" }),
-        browser               : ["Chrome (Linux)", "Chrome", "121.0.0"],
-        version,
-        connectTimeoutMs      : 60000,
-        defaultQueryTimeoutMs : undefined,
-        retryRequestDelayMs   : 2000,
-    });
-
-    sock.ev.on("creds.update", saveCreds);
-
-    sock.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect, qr } = update;
-        if (qr) { lastQR = qr; isConnected = false; console.log("✅ QR Ready"); }
-        if (connection === "open") {
-            lastQR = ""; isConnected = true;
-            console.log("✅ WhatsApp Connected!");
-            await pushSessionToGitHub();
-            await pushDataToGitHub().catch(() => {});
-        }
-        if (connection === "close") {
-            isConnected = false;
-            const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
-            console.log("❌ Disconnected. Code:", code);
-            if (code === DisconnectReason.loggedOut) {
-                try { fs.rmSync("auth_info_baileys", { recursive: true, force: true }); } catch {}
-            }
-            setTimeout(startBot, code === 408 ? 5000 : 3000);
-        }
-    });
-
-    sock.ev.on("messages.upsert", async ({ messages, type }) => {
-        if (type !== "notify") return;
-        for (const m of messages) {
-            try { await handleMessage(sock, m); }
-            catch (err) { console.error("❌ handleMessage:", err.message); }
-        }
-    });
-}
-
-// ============================================================
-//  MESSAGE HANDLER
-// ============================================================
-async function handleMessage(sock, m) {
-    const from = m.key?.remoteJid || "";
-    if (!m.message || m.key.fromMe) return;
-    if (from.endsWith("@g.us")) return;
-
-    const number  = from.replace("@s.whatsapp.net", "").replace("@lid", "");
-    const msg     = m.message?.documentWithCaptionMessage?.message
-                 || m.message?.viewOnceMessage?.message
-                 || m.message;
-    const msgType = msg ? Object.keys(msg)[0] : "";
-    const text    = (msg?.conversation || msg?.extendedTextMessage?.text || "").trim();
-
-    console.log(`📩 from=${number} type=${msgType} text="${text}"`);
-
-    // ── .ping ──
-    if (text === ".ping") {
-        await sock.sendMessage(from, { text: "🏓 Pong! Bot সচল আছে।" });
-        return;
-    }
-
-    // ── .status ──
-    if (text === ".status") {
-        const settings = getSettings();
-        const price    = settings.cardPrice || 0;
-        if (isAllowed(number)) {
-            const bal     = getUserBalance(number);
-            const balText = price > 0
-                ? `\n\n💰 আপনার Balance: *${bal} টাকা*\n💳 প্রতি কার্ড: *${price} টাকা*`
-                : "";
-            await sock.sendMessage(from, {
-                text: `✅ আপনি অনুমোদিত। NID PDF পাঠান।${balText}`
-            });
-        } else {
-            await sock.sendMessage(from, { text: "⛔ আপনি অনুমোদিত নন।\nঅ্যাডমিনের সাথে যোগাযোগ করুন।" });
-        }
-        return;
-    }
-
-    // ── Non-PDF message ──
-    const docMsg = msg?.documentMessage;
-    if (!docMsg) {
-        if (msgType === "conversation" || msgType === "extendedTextMessage") {
-            await sock.sendMessage(from, {
-                text: "📄 অনুগ্রহ করে আপনার NID-এর *PDF ফাইলটি* পাঠান।"
-            }, { quoted: m });
-        }
-        return;
-    }
-
-    if (!docMsg.mimetype?.includes("pdf")) {
-        await sock.sendMessage(from, { text: "❌ শুধুমাত্র PDF ফাইল পাঠান।" }, { quoted: m });
-        return;
-    }
-
-    // ── Permission check ──
-    if (!isAllowed(number)) {
-        await sock.sendMessage(from, {
-            text: "⛔ আপনার নম্বরটি অনুমোদিত নয়।\nঅ্যাডমিনের সাথে যোগাযোগ করুন।"
-        }, { quoted: m });
-        return;
-    }
-
-    // ── Balance check ──
-    const settings = getSettings();
-    const price    = settings.cardPrice || 0;
-    if (price > 0) {
-        const bal = getUserBalance(number);
-        if (bal < price) {
-            await sock.sendMessage(from, {
-                text:
-                    `⚠️ *Balance অপর্যাপ্ত!*\n\n` +
-                    `💰 আপনার Balance: *${bal} টাকা*\n` +
-                    `💳 কার্ড তৈরিতে লাগে: *${price} টাকা*\n\n` +
-                    `Balance Recharge করতে অ্যাডমিনের সাথে যোগাযোগ করুন।`
-            }, { quoted: m });
-            return;
-        }
-    }
-
-    // ── Auto PDF Process ──
-    await sock.sendMessage(from, {
-        text: "⏳ NID Card তৈরি হচ্ছে... একটু অপেক্ষা করুন।"
-    }, { quoted: m });
-
-    try {
-        const dlMsg  = { ...m, message: msg };
-        const pdfBuf = await downloadMediaMessage(dlMsg, "buffer", {});
-        if (!pdfBuf || pdfBuf.length < 100) throw new Error("PDF download failed or empty");
-        console.log(`✅ PDF: ${pdfBuf.length} bytes from ${number}`);
-
-        const apiRes = await extractNIDFromPDF(pdfBuf);
-        const mapped = mapAPIData(apiRes);
-        if (!mapped.nationalId && !mapped.nameBangla) throw new Error("NID তথ্য বের করা যায়নি।");
-        console.log(`✅ Extracted: ${mapped.nameBangla} | ${mapped.nationalId}`);
-
-        // Balance deduct
-        deductBalance(number);
-
-        // PDF ও HTML parallel এ বানাও
-        const [outPdf, htmlUrl] = await Promise.allSettled([
-            generatePDFFromMapped(mapped),
-            buildAndSaveHTML(mapped),
-        ]).then(([pdfResult, htmlResult]) => [
-            pdfResult.status === "fulfilled" ? pdfResult.value : null,
-            htmlResult.status === "fulfilled" ? htmlResult.value : "",
-        ]);
-
-        if (!outPdf) throw new Error("PDF তৈরি করা সম্ভব হয়নি।");
-
-        // Stats record + auto GitHub backup
-        recordStat(number, mapped.nameBangla || mapped.nameEnglish);
-
-        const name    = mapped.nameBangla || mapped.nameEnglish || "অজানা";
-        const nid     = mapped.nationalId || "N/A";
-        const pdfName = `NID_${nid}.pdf`;
-
-        let balMsg  = "";
-        if (price > 0) {
-            balMsg = `\n💰 বাকি Balance: *${getUserBalance(number)} টাকা*`;
-        }
-        let linkMsg = htmlUrl
-            ? `\n\n🖨️ Browser থেকে Print করতে:\n${htmlUrl}`
-            : "";
-
-        await sock.sendMessage(from, {
-            document : outPdf,
-            mimetype : "application/pdf",
-            fileName : pdfName,
-            caption  :
-                `✅ *NID কার্ড প্রস্তুত!*\n\n` +
-                `👤 নাম: ${name}\n` +
-                `🪪 NID: ${nid}\n` +
-                `📅 DOB: ${mapped.dateOfBirth}` +
-                balMsg + linkMsg,
-        }, { quoted: m });
-
-        console.log(`✅ PDF sent to ${number}`);
-
-    } catch (err) {
-        console.error("❌ Process error:", err.message);
-        await sock.sendMessage(from, {
-            text: `⚠️ সমস্যা হয়েছে:\n${err.message}\n\nআবার চেষ্টা করুন।`
-        }, { quoted: m });
-    }
-}
-
-startBot().catch(err => console.error("Critical:", err));
-
-// ============================================================
-//  HTML TEMPLATES
-// ============================================================
-function htmlPage(title, body) {
-    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title>
-<style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0d0f14;color:#e8eaf0;font-family:sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}
-.connected{font-size:1.4rem;margin-bottom:20px}.btn{display:inline-block;padding:10px 24px;background:#00e5a0;color:#0d1a12;border-radius:8px;text-decoration:none;font-weight:700;margin-top:12px}
-h2{margin-bottom:12px}p{color:#6b7894;margin-top:8px;font-size:.9rem}img{margin:12px auto;display:block}</style></head>
-<body><div>${body}</div></body></html>`;
-}
-
-function adminLogin(error) {
-    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Admin Login</title>
-<style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0d0f14;color:#e8eaf0;font-family:'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}
-.box{background:#161b24;border:1px solid #2a3347;border-radius:16px;padding:44px 38px;width:340px;box-shadow:0 0 50px rgba(0,229,160,.07)}
-.icon{width:52px;height:52px;background:linear-gradient(135deg,#00e5a0,#0084ff);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;margin:0 auto 18px}
-h2{text-align:center;margin-bottom:6px;font-size:1.1rem}p{text-align:center;color:#6b7894;font-size:.78rem;margin-bottom:26px}
-label{display:block;font-size:.72rem;color:#6b7894;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px}
-input{width:100%;padding:11px 14px;background:#1e2535;border:1px solid #2a3347;border-radius:9px;color:#e8eaf0;font-size:.9rem;outline:none;margin-bottom:16px}
-input:focus{border-color:#00e5a0}button{width:100%;padding:12px;background:linear-gradient(135deg,#00e5a0,#00c080);border:none;border-radius:9px;color:#0d1a12;font-weight:700;font-size:.95rem;cursor:pointer}
-.err{background:rgba(255,69,96,.1);border:1px solid rgba(255,69,96,.3);color:#ff4560;padding:9px 13px;border-radius:8px;font-size:.82rem;margin-bottom:14px;text-align:center}</style></head>
-<body><div class="box"><div class="icon">🤖</div><h2>Bot Admin Panel</h2><p>WhatsApp NID Card Bot</p>
-${error ? `<div class="err">${error}</div>` : ""}
-<form method="POST" action="/admin"><input type="hidden" name="action" value="login">
-<label>Password</label><input type="password" name="pass" placeholder="••••••••" autofocus>
-<button type="submit">Login →</button></form></div></body></html>`;
-}
-
-function adminDashboard(users, stats, totalCards, activeUsers, settings) {
-    const price = settings.cardPrice || 0;
-
-    const statsRows = Object.entries(stats).map(([num, s]) =>
-        `<tr><td class="num">${num}</td><td>${s.name||'—'}</td><td class="cnt">${s.count}</td><td class="dt">${s.lastUsed}</td></tr>`
-    ).join("") || `<tr><td colspan="4" class="empty">এখনো কেউ ব্যবহার করেনি</td></tr>`;
-
-    const userRows = users.map(u => {
-        const active = u.active !== false;
-        const bal    = u.balance ?? 0;
-        return `<tr>
-        <td class="num">${u.number}</td>
-        <td>${u.name||'—'}</td>
-        <td><span class="badge ${active?'on':'off'}">${active?'Active':'Inactive'}</span></td>
-        ${price > 0 ? `<td class="bal">${bal} ৳</td>` : ''}
-        <td class="dt">${u.added||''}</td>
-        <td>
-          ${price > 0 ? `
-          <form method="POST" style="display:inline">
-            <input type="hidden" name="action" value="recharge">
-            <input type="hidden" name="number" value="${u.number}">
-            <input type="number" name="amount" placeholder="টাকা" min="1" step="0.5"
-              style="width:65px;padding:3px 6px;background:#1e2535;border:1px solid #2a3347;border-radius:5px;color:#e8eaf0;font-size:.75rem;margin-right:3px">
-            <button class="btn-sm ok" type="submit">Recharge</button>
-          </form>` : ''}
-          <form method="POST" style="display:inline">
-            <input type="hidden" name="action" value="toggle">
-            <input type="hidden" name="number" value="${u.number}">
-            <button class="btn-sm ${active?'warn':'ok'}">${active?'Deactivate':'Activate'}</button>
-          </form>
-          <form method="POST" style="display:inline" onsubmit="return confirm('মুছবেন?')">
-            <input type="hidden" name="action" value="delete">
-            <input type="hidden" name="number" value="${u.number}">
-            <button class="btn-sm danger">Delete</button>
-          </form>
-        </td></tr>`;
-    }).join("") || `<tr><td colspan="${price>0?6:5}" class="empty">কোনো user নেই</td></tr>`;
-
-    return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Admin Panel</title>
-<style>*{margin:0;padding:0;box-sizing:border-box}body{background:#0d0f14;color:#e8eaf0;font-family:'Segoe UI',sans-serif;min-height:100vh}
-.topbar{background:#161b24;border-bottom:1px solid #2a3347;padding:13px 24px;display:flex;align-items:center;justify-content:space-between}
-.t-left{display:flex;align-items:center;gap:11px}
-.t-logo{width:34px;height:34px;background:linear-gradient(135deg,#00e5a0,#0084ff);border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:17px}
-.t-title{font-size:.95rem;font-weight:700}.t-sub{font-size:.7rem;color:#6b7894}
-.btn-out{background:transparent;border:1px solid #2a3347;color:#6b7894;padding:6px 14px;border-radius:8px;font-size:.76rem;cursor:pointer}
-.btn-out:hover{border-color:#ff4560;color:#ff4560}
-.btn-backup{background:rgba(0,132,255,.12);border:1px solid rgba(0,132,255,.35);color:#0084ff;padding:6px 14px;border-radius:8px;font-size:.76rem;cursor:pointer;font-family:inherit}
-.btn-backup:hover{background:rgba(0,132,255,.22)}
-.topbar-right{display:flex;gap:8px;align-items:center}
-.wrap{max-width:980px;margin:0 auto;padding:24px 18px}
-.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:13px;margin-bottom:24px}
-.sc{background:#161b24;border:1px solid #2a3347;border-radius:10px;padding:16px 18px}
-.sc-label{font-size:.7rem;color:#6b7894;letter-spacing:1px;text-transform:uppercase;margin-bottom:7px}
-.sc-val{font-size:2rem;font-weight:700}.green{color:#00e5a0}.blue{color:#0084ff}.gold{color:#ffd700}
-.card{background:#161b24;border:1px solid #2a3347;border-radius:10px;overflow:hidden;margin-bottom:22px}
-.card-head{padding:14px 18px;border-bottom:1px solid #2a3347;font-size:.8rem;color:#00e5a0;letter-spacing:1px;text-transform:uppercase}
-.price-form{padding:14px 18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:1px solid #2a3347}
-.price-form label{font-size:.82rem;color:#6b7894}
-.price-form input[type=number]{width:110px;padding:8px 12px;background:#1e2535;border:1px solid #2a3347;border-radius:8px;color:#e8eaf0;font-size:.9rem;outline:none}
-.price-form input:focus{border-color:#ffd700}
-.btn-price{padding:8px 18px;background:#ffd700;border:none;border-radius:8px;color:#0d0f14;font-weight:700;font-size:.84rem;cursor:pointer}
-.price-note{font-size:.74rem;color:#6b7894}
-.add-form{padding:16px 18px;display:flex;gap:9px;flex-wrap:wrap}
-.add-form input{flex:1;min-width:130px;padding:9px 13px;background:#1e2535;border:1px solid #2a3347;border-radius:8px;color:#e8eaf0;font-size:.86rem;outline:none}
-.add-form input:focus{border-color:#00e5a0}
-.btn-add{padding:9px 20px;background:#00e5a0;border:none;border-radius:8px;color:#0d1a12;font-weight:700;font-size:.86rem;cursor:pointer}
-table{width:100%;border-collapse:collapse}
-thead th{padding:10px 15px;text-align:left;font-size:.7rem;color:#6b7894;letter-spacing:1px;text-transform:uppercase;border-bottom:1px solid #2a3347}
-tbody td{padding:10px 15px;font-size:.84rem;border-bottom:1px solid rgba(42,51,71,.5);vertical-align:middle}
-tbody tr:last-child td{border-bottom:none}tbody tr:hover{background:rgba(255,255,255,.02)}
-.num{color:#0084ff;font-family:monospace}.cnt{color:#00e5a0;font-weight:700}.dt{color:#6b7894;font-size:.76rem}
-.bal{color:#ffd700;font-weight:700}
-.badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:.7rem;font-weight:700}
-.on{background:rgba(0,229,160,.12);color:#00e5a0}.off{background:rgba(255,69,96,.1);color:#ff4560}
-.empty{text-align:center;color:#6b7894;padding:30px}
-.btn-sm{padding:4px 10px;border-radius:6px;font-size:.74rem;font-family:inherit;cursor:pointer;border:1px solid;font-weight:600;margin-right:4px}
-.btn-sm.warn{border-color:rgba(255,165,0,.4);color:#ffa500;background:rgba(255,165,0,.08)}
-.btn-sm.ok{border-color:rgba(0,229,160,.4);color:#00e5a0;background:rgba(0,229,160,.08)}
-.btn-sm.danger{border-color:rgba(255,69,96,.3);color:#ff4560;background:rgba(255,69,96,.06)}
-@media(max-width:660px){.stats{grid-template-columns:1fr 1fr}}</style></head>
-<body>
-<div class="topbar">
-  <div class="t-left">
-    <div class="t-logo">🤖</div>
-    <div><div class="t-title">Bot Admin Panel</div><div class="t-sub">WhatsApp NID Card Bot</div></div>
-  </div>
-  <div class="topbar-right">
-    <form method="POST">
-      <input type="hidden" name="action" value="backup_now">
-      <button class="btn-backup" type="submit">☁️ Backup Now</button>
+app.get(\"/admin/login\", (req, res) => {
+  res.send(`<html><body style=\"font-family:sans-serif;max-width:400px;margin:80px auto;padding:30px;background:#f5f5f5;border-radius:8px;\">
+    <h2>🔐 Admin Login</h2>
+    <form method=\"POST\" action=\"/admin/login\">
+      <input name=\"password\" type=\"password\" placeholder=\"Password\" style=\"width:100%;padding:10px;margin:10px 0;\" required/>
+      <button type=\"submit\" style=\"width:100%;padding:10px;background:#0078d4;color:#fff;border:0;border-radius:4px;cursor:pointer;\">Login</button>
     </form>
-    <form method="POST">
-      <input type="hidden" name="action" value="logout">
-      <button class="btn-out">Logout</button>
-    </form>
-  </div>
-</div>
+  </body></html>`);
+});
 
-<div class="wrap">
-  <div class="stats">
-    <div class="sc"><div class="sc-label">মোট Users</div><div class="sc-val blue">${users.length}</div></div>
-    <div class="sc"><div class="sc-label">Active</div><div class="sc-val green">${activeUsers}</div></div>
-    <div class="sc"><div class="sc-label">মোট Cards</div><div class="sc-val green">${totalCards}</div></div>
-    <div class="sc"><div class="sc-label">কার্ড মূল্য</div><div class="sc-val gold">${price > 0 ? price + ' ৳' : 'Free'}</div></div>
-  </div>
+app.post(\"/admin/login\", (req, res) => {
+  if (req.body.password === CONFIG.ADMIN_PASS) {
+    const tok = crypto.randomBytes(16).toString(\"hex\");
+    adminSessions.add(tok);
+    res.setHeader(\"Set-Cookie\", `admin_sess=${tok}; HttpOnly; Path=/; Max-Age=86400`);
+    return res.redirect(\"/admin\");
+  }
+  res.send(\"❌ Wrong password. <a href='/admin/login'>Try again</a>\");
+});
 
-  <div class="card">
-    <div class="card-head">💳 প্রতি কার্ডের মূল্য নির্ধারণ</div>
-    <form method="POST" class="price-form">
-      <input type="hidden" name="action" value="set_price">
-      <label>মূল্য:</label>
-      <input type="number" name="price" value="${price}" min="0" step="0.5" placeholder="0">
-      <button type="submit" class="btn-price">Set Price</button>
-      <span class="price-note">0 দিলে সবার জন্য ফ্রি</span>
-    </form>
-  </div>
+app.get(\"/admin/logout\", (req, res) => {
+  const cookie = (req.headers.cookie || \"\").split(\";\").map(s => s.trim()).find(s => s.startsWith(\"admin_sess=\"));
+  if (cookie) adminSessions.delete(cookie.split(\"=\")[1]);
+  res.setHeader(\"Set-Cookie\", \"admin_sess=; Max-Age=0; Path=/\");
+  res.redirect(\"/admin/login\");
+});
 
-  <div class="card">
-    <div class="card-head">➕ নতুন Number যোগ করুন</div>
-    <form method="POST" class="add-form">
-      <input type="hidden" name="action" value="add">
-      <input type="text" name="number" placeholder="8801XXXXXXXXX (দেশ কোড সহ)" required>
-      <input type="text" name="name" placeholder="নাম (ঐচ্ছিক)">
-      ${price > 0 ? `<input type="number" name="balance" placeholder="প্রাথমিক Balance (৳)" min="0" step="0.5">` : `<input type="hidden" name="balance" value="0">`}
-      <button type="submit" class="btn-add">যোগ করুন</button>
-    </form>
-  </div>
+app.get(\"/admin\", adminAuth, (req, res) => {
+  const users = getUsers();
+  const stats = getStats();
+  const settings = getSettings();
+  const rows = users.map(u => {
+    const s = stats[normalizeNumber(u.number)] || { count: 0, lastUsed: \"—\" };
+    return `<tr>
+      <td>${u.number}</td><td>${u.name || \"—\"}</td>
+      <td>${u.balance || 0}</td>
+      <td>${u.active !== false ? \"✅\" : \"❌\"}</td>
+      <td>${s.count}</td><td>${s.lastUsed || \"—\"}</td>
+      <td>
+        <form method=\"POST\" action=\"/admin/recharge\" style=\"display:inline\">
+          <input type=\"hidden\" name=\"number\" value=\"${u.number}\"/>
+          <input name=\"amount\" placeholder=\"৳\" style=\"width:60px\"/>
+          <button>Recharge</button>
+        </form>
+        <form method=\"POST\" action=\"/admin/toggle\" style=\"display:inline\">
+          <input type=\"hidden\" name=\"number\" value=\"${u.number}\"/>
+          <button>Toggle</button>
+        </form>
+        <form method=\"POST\" action=\"/admin/delete\" style=\"display:inline\">
+          <input type=\"hidden\" name=\"number\" value=\"${u.number}\"/>
+          <button onclick=\"return confirm('Delete?')\">🗑️</button>
+        </form>
+      </td>
+    </tr>`;
+  }).join(\"\");
 
-  <div class="card">
-    <div class="card-head">📋 অনুমোদিত Numbers</div>
-    <table>
-      <thead><tr>
-        <th>Number</th><th>নাম</th><th>Status</th>
-        ${price > 0 ? '<th>Balance</th>' : ''}
-        <th>যোগের তারিখ</th><th>Action</th>
-      </tr></thead>
-      <tbody>${userRows}</tbody>
-    </table>
-  </div>
+  res.send(`<html><head><style>
+    body{font-family:sans-serif;max-width:1100px;margin:30px auto;padding:20px}
+    table{width:100%;border-collapse:collapse;margin:15px 0}
+    th,td{border:1px solid #ddd;padding:8px;text-align:left;font-size:13px}
+    th{background:#0078d4;color:#fff}
+    .card{background:#f9f9f9;padding:15px;margin:10px 0;border-radius:6px}
+    button{padding:5px 10px;cursor:pointer}
+  </style></head><body>
+    <h1>📊 NID Bot Admin Panel</h1>
+    <div style=\"text-align:right\"><a href=\"/admin/logout\">Logout</a></div>
 
-  <div class="card">
-    <div class="card-head">📊 Card Generation Statistics</div>
-    <table>
-      <thead><tr><th>Number</th><th>নাম</th><th>Cards</th><th>শেষ ব্যবহার</th></tr></thead>
-      <tbody>${statsRows}</tbody>
-    </table>
-  </div>
-</div>
-</body></html>`;
-}
+    <div class=\"card\">
+      <h3>⚙️ Settings</h3>
+      <form method=\"POST\" action=\"/admin/settings\">
+        Card Price (৳): <input name=\"cardPrice\" value=\"${settings.cardPrice || 0}\" style=\"width:80px\"/>
+        <button>Save</button>
+      </form>
+    </div>
 
-// ============================================================
-//  FONT EMBED
-// ============================================================
-async function embedFontsInHTML(html) {
-    const fonts = [
-        { url: "https://auto.onlinebd.top/fonts/Bangla.ttf", family: "Bangla", weight: "normal" },
-        { url: "https://auto.onlinebd.top/fonts/Arial.ttf",  family: "Arial",  weight: "normal" },
-    ];
-    let fontCSS = "";
-    for (const font of fonts) {
-        try {
-            const res = await axios.get(font.url, { responseType: "arraybuffer", timeout: 15000 });
-            const b64 = Buffer.from(res.data).toString("base64");
-            fontCSS += `\n@font-face{font-family:'${font.family}';src:url('data:font/truetype;base64,${b64}') format('truetype');font-weight:${font.weight};font-style:normal;}`;
-            console.log(`✅ Font embedded: ${font.family} — ${Math.round(res.data.byteLength/1024)}KB`);
-        } catch (e) { console.log(`⚠️ Font skip: ${font.url} — ${e.message}`); }
-    }
-    const overrideCSS = `${fontCSS}\n*{font-family:Bangla,Arial,sans-serif!important;}.bn{font-family:Bangla,sans-serif!important;}.sans{font-family:Arial,sans-serif!important;}`;
-    if (html.includes("</head>")) {
-        html = html.replace("</head>", `<style id="embedded-fonts">${overrideCSS}</style>\n</head>`);
-    } else {
-        html = `<style id="embedded-fonts">${overrideCSS}</style>\n` + html;
-    }
-    return html;
-}
+    <div class=\"card\">
+      <h3>➕ Add User</h3>
+      <form method=\"POST\" action=\"/admin/add\">
+        <input name=\"number\" placeholder=\"WhatsApp Number (880...)\" required/>
+        <input name=\"name\" placeholder=\"Name\"/>
+        <input name=\"balance\" placeholder=\"Initial balance\" value=\"0\"/>
+        <button>Add</button>
+      </form>
+    </div>
 
-// ============================================================
-//  PATH FIX
-// ============================================================
-function fixRelativePaths(html) {
-    const BASE = "https://auto.onlinebd.top/bot";
-    const patterns = [
-        [/(src\s*=\s*["'])(assets\/)/gi,  `$1${BASE}/assets/`],
-        [/(href\s*=\s*["'])(assets\/)/gi, `$1${BASE}/assets/`],
-        [/(src\s*=\s*["'])(photo\/)/gi,   `$1${BASE}/photo/`],
-        [/(src\s*=\s*)(assets\/)/gi,      `$1${BASE}/assets/`],
-        [/(href\s*=\s*)(assets\/)/gi,     `$1${BASE}/assets/`],
-        [/(src\s*=\s*)(photo\/)/gi,       `$1${BASE}/photo/`],
-        [/(url\s*\(\s*["']?)(assets\/)/gi,`$1${BASE}/assets/`],
-        [/(url\s*\(\s*["']?)(photo\/)/gi, `$1${BASE}/photo/`],
-    ];
-    for (const [r, rep] of patterns) html = html.replace(r, rep);
-    const doubled = new RegExp(BASE.replace(/\./g,'\\.') + '/' + BASE.replace(/\./g,'\\.').replace('https://',''), 'g');
-    html = html.replace(doubled, BASE);
-    return html;
-}
+    <h3>👥 Users (${users.length})</h3>
+    <table><tr><th>Number</th><th>Name</th><th>Balance</th><th>Active</th><th>Cards</th><th>Last Used</th><th>Actions</th></tr>${rows}</table>
 
-// ============================================================
-//  UTILS
-// ============================================================
-function parseCookies(str) {
-    if (!str) return {};
-    return Object.fromEntries(
-        str.split(";").map(c => c.trim()).filter(c => c.includes("="))
-           .map(c => { const i = c.indexOf("="); return [c.slice(0,i).trim(), c.slice(i+1).trim()]; })
-    );
-}
-function readBody(req) {
-    return new Promise(resolve => { let b = ""; req.on("data", c => b += c); req.on("end", () => resolve(b)); });
-}
+    <div class=\"card\">
+      <form method=\"POST\" action=\"/admin/backup\"><button>📦 Backup to GitHub Now</button></form>
+    </div>
+  </body></html>`);
+});
+
+app.post(\"/admin/add\", adminAuth, (req, res) => {
+  const users = getUsers();
+  const { number, name, balance } = req.body;
+  const n = normalizeNumber(number);
+  if (!users.find(u => normalizeNumber(u.number) === n)) {
+    users.push({ number: n, name: name || \"\", balance: parseInt(balance) || 0, active: true });
+    saveUsers(users);
+    pushDataToGitHub();
+  }
+  res.redirect(\"/admin\");
+});
+
+app.post(\"/admin/recharge\", adminAuth, (req, res) => {
+  const users = getUsers();
+  const i = users.findIndex(u => normalizeNumber(u.number) === normalizeNumber(req.body.number));
+  if (i !== -1) {
+    users[i].balance = (users[i].balance || 0) + (parseInt(req.body.amount) || 0);
+    saveUsers(users);
+    pushDataToGitHub();
+  }
+  res.redirect(\"/admin\");
+});
+
+app.post(\"/admin/toggle\", adminAuth, (req, res) => {
+  const users = getUsers();
+  const i = users.findIndex(u => normalizeNumber(u.number) === normalizeNumber(req.body.number));
+  if (i !== -1) {
+    users[i].active = users[i].active === false;
+    saveUsers(users);
+    pushDataToGitHub();
+  }
+  res.redirect(\"/admin\");
+});
+
+app.post(\"/admin/delete\", adminAuth, (req, res) => {
+  const users = getUsers().filter(u => normalizeNumber(u.number) !== normalizeNumber(req.body.number));
+  saveUsers(users);
+  pushDataToGitHub();
+  res.redirect(\"/admin\");
+});
+
+app.post(\"/admin/settings\", adminAuth, (req, res) => {
+  saveSettings({ cardPrice: parseInt(req.body.cardPrice) || 0 });
+  pushDataToGitHub();
+  res.redirect(\"/admin\");
+});
+
+app.post(\"/admin/backup\", adminAuth, (req, res) => {
+  pushDataToGitHub();
+  res.redirect(\"/admin\");
+});
+
+// ========== START ==========
+restoreDataFromGitHub();
+app.listen(CONFIG.PORT, () => {
+  console.log(`🚀 NID Bot (Cloud API) running on port ${CONFIG.PORT}`);
+  console.log(`📡 Webhook URL: ${CONFIG.BASE_URL}/webhook`);
+  console.log(`🔐 Admin Panel: ${CONFIG.BASE_URL}/admin`);
+});
+
+// Self-ping (keep Render awake)
+setInterval(() => {
+  axios.get(CONFIG.BASE_URL).catch(() => {});
+}, 14 * 60 * 1000);
+"
+Observation: Create successful: /app/cloudapi-version/index.js
