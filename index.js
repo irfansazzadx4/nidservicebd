@@ -202,22 +202,25 @@ async function downloadMedia(mediaId) {
 
 // ========== NID EXTRACTION & CARD GENERATION ==========
 function mapAPIData(d) {
-  // Keys must exactly match PHP $_POST variable names in nid-bn.php
   return {
-    nid:        d.nationalId || d.nid || d.NID || d.national_id || "",
-    pin:        d.pin || "",
-    pin_status: "disabled",                          // always show NID, not PIN
-    nameBangla: d.nameBangla || d.name_bn || "",
-    nameEnglish:d.nameEnglish || d.name_en || "",
-    dob:        d.dateOfBirth || d.dob || "",        // $_POST['dob']
-    nameFather: d.fatherName || d.father_name || "", // $_POST['nameFather']
-    nameMother: d.motherName || d.mother_name || "", // $_POST['nameMother']
-    fulladdress:d.address || d.permanent_address || "", // $_POST['fulladdress']
-    birthPlace: d.birthPlace || d.birth_place || "", // $_POST['birthPlace']
-    bloodGroup: d.bloodGroup || d.blood_group || "", // $_POST['bloodGroup']
-    issueDate:  d.dateOfToday || "",                 // $_POST['issueDate'] (প্রদানের তারিখ)
-    imageUrl12: d.userIMG || d.imageUrl12 || "",     // user photo URL
-    imageUrl22: d.signIMG || d.imageUrl22 || "",     // signature URL
+    // PHP expects: nid, nameBangla, nameEnglish, dob, nameFather, nameMother, fulladdress, birthPlace, bloodGroup, imageUrl12, imageUrl22, pin
+    nid: d.nationalId || d.nid || d.NID || d.national_id || "",
+    nameBangla: d.nameBangla || d.name_bn || d.bangla_name || "",
+    nameEnglish: d.nameEnglish || d.name_en || d.english_name || "",
+    dob: d.dateOfBirth || d.dob || d.date_of_birth || d.DOB || "",
+    dateOfToday: d.dateOfToday || "",
+    // PHP uses nameFather and nameMother (not fatherName/motherName)
+    nameFather: d.fatherName || d.father_name || d.father || "",
+    nameMother: d.motherName || d.mother_name || d.mother || "",
+    // PHP uses fulladdress (not address)
+    fulladdress: d.address || d.permanent_address || "",
+    birthPlace: d.birthPlace || d.birth_place || "",
+    bloodGroup: d.bloodGroup || d.blood_group || "",
+    gender: d.gender || "",
+    religion: d.religion || "",
+    imageUrl12: d.userIMG || d.imageUrl12 || d.photo || d.image || "",
+    imageUrl22: d.signIMG || d.imageUrl22 || d.signature || d.sign || "",
+    pin: d.pin || "",
   };
 }
 
