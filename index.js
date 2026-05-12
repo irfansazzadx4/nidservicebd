@@ -243,14 +243,17 @@ async function extractNIDFromPDF(buffer) {
   }
 }
 
-// Assets (CSS, JS, images) live on the PHP server, not on Render
-const PHP_BASE = "https://auto.onlinebd.top";
+// API generates HTML with relative paths like "assets/css/nid_css.css"
+// Inject <base> tag so browser resolves them against the PHP server
+const PHP_BASE = "https://auto.onlinebd.top/bot/";
 
 function fixRelativePaths(html) {
-  return html
-    .replace(/src="\/(?!\/)/g, `src="${PHP_BASE}/`)
-    .replace(/href="\/(?!\/)/g, `href="${PHP_BASE}/`)
-    .replace(/url\(\/(?!\/)/g, `url(${PHP_BASE}/`);
+  // If <head> exists, inject base tag
+  if (html.includes('<head>')) {
+    return html.replace('<head>', `<head><base href="${PHP_BASE}">`);
+  }
+  // Fallback: prepend base tag
+  return `<base href="${PHP_BASE}">` + html;
 }
 
 async function fetchHTMLFromData(data) {
@@ -337,7 +340,7 @@ async function handleIncoming(msg, contact) {
       recordStat(from);
       pushDataToGitHub();
 
-      const filename = `nid-${data.nid}.pdf`;
+      const filename = `NID_${data.nid}.pdf`;
       const caption = `✅ আপনার NID Card তৈরি হয়েছে!\n\n👤 নাম: ${data.nameBangla || data.nameEnglish}\n🆔 NID: ${data.nid}\n🎂 DOB: ${data.dob}\n${price > 0 ? `💰 Remaining Balance: ${getUserBalance(from)} টাকা\n` : ""}🖨️ Print করতে: ${htmlUrl}`;
 
       const mediaId = await uploadMedia(pdfBuffer, filename, "application/pdf");
