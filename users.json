@@ -2,7 +2,7 @@
   {
     "number": "97336452121",
     "name": "Irfan",
-    "balance": 4997,
+    "balance": 4994,
     "active": true
   },
   {
@@ -15,12 +15,6 @@
     "number": "8801799390061",
     "name": "Online",
     "balance": 92,
-    "active": true
-  },
-  {
-    "number": "8801922009905",
-    "name": "Sohel",
-    "balance": 100,
     "active": true
   }
 ]
