@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const FormData = require("form-data");
-const { exec } = require("child_process"); // ✅ CHANGE 1: execSync → exec (non-blocking)
+const { execSync } = require("child_process");
 
 // ========== CONFIG ==========
 const CONFIG = {
@@ -99,23 +99,22 @@ function recordStat(number) {
 }
 
 // ========== GITHUB BACKUP ==========
-// ✅ CHANGE 2: exec() ব্যবহার — GitHub push এর সময় bot block হবে না
 function pushDataToGitHub() {
   if (!CONFIG.GITHUB_REPO || !CONFIG.GITHUB_TOKEN) return;
-  const repoUrl = `https://${CONFIG.GITHUB_TOKEN}@github.com/${CONFIG.GITHUB_REPO}.git`;
-  const tmp = "/tmp/databackup_" + Date.now();
-  const cmd = [
-    `git clone --depth 1 -b ${CONFIG.GITHUB_BRANCH} ${repoUrl} ${tmp}`,
-    `cp ${CONFIG.DATA_DIR}/users.json ${tmp}/ 2>/dev/null || true`,
-    `cp ${CONFIG.DATA_DIR}/stats.json ${tmp}/ 2>/dev/null || true`,
-    `cp ${CONFIG.DATA_DIR}/settings.json ${tmp}/ 2>/dev/null || true`,
-    `cd ${tmp} && git config user.email bot@bot.com && git config user.name bot && git add -A && git commit -m "data backup" || true && git push`,
-    `rm -rf ${tmp}`,
-  ].join(" && ");
-  exec(cmd, (err) => {
-    if (err) console.error("GitHub push error:", err.message);
-    else console.log("✅ Data pushed to GitHub");
-  });
+  try {
+    const repoUrl = `https://${CONFIG.GITHUB_TOKEN}@github.com/${CONFIG.GITHUB_REPO}.git`;
+    const tmp = "/tmp/databackup_" + Date.now();
+    execSync(`git clone --depth 1 -b ${CONFIG.GITHUB_BRANCH} ${repoUrl} ${tmp}`, { stdio: "ignore" });
+    ["users.json", "stats.json", "settings.json"].forEach(f => {
+      const src = path.join(CONFIG.DATA_DIR, f);
+      if (fs.existsSync(src)) fs.copyFileSync(src, path.join(tmp, f));
+    });
+    execSync(`cd ${tmp} && git config user.email bot@bot.com && git config user.name bot && git add -A && git commit -m "data backup" || true && git push`, { stdio: "ignore" });
+    execSync(`rm -rf ${tmp}`);
+    console.log("✅ Data pushed to GitHub");
+  } catch (e) {
+    console.error("GitHub push error:", e.message);
+  }
 }
 
 function restoreDataFromGitHub() {
@@ -290,9 +289,7 @@ async function generatePDFFromMapped(data) {
 async function handleIncoming(msg, contact) {
   const from = msg.from;
   const msgId = msg.id;
-
-  // ✅ CHANGE 3: await সরানো হয়েছে — blue tick এর জন্য bot আর wait করবে না
-  markRead(msgId);
+  await markRead(msgId);
 
   if (msg.type === "text") {
     const text = msg.text.body.trim().toLowerCase();
@@ -332,7 +329,6 @@ async function handleIncoming(msg, contact) {
 
       if (price > 0) deductBalance(from);
 
-      // ✅ CHANGE 4: HTML save + PDF generate parallel এ — সবচেয়ে বড় speed boost
       const [htmlUrl, pdfBuffer] = await Promise.all([
         buildAndSaveHTML(data),
         generatePDFFromMapped(data),
