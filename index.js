@@ -203,21 +203,21 @@ async function downloadMedia(mediaId) {
 // ========== NID EXTRACTION & CARD GENERATION ==========
 function mapAPIData(d) {
   return {
-    // API returns "nationalId" not "nid"
+    // PHP expects: nid, nameBangla, nameEnglish, dob, nameFather, nameMother, fulladdress, birthPlace, bloodGroup, imageUrl12, imageUrl22, pin
     nid: d.nationalId || d.nid || d.NID || d.national_id || "",
     nameBangla: d.nameBangla || d.name_bn || d.bangla_name || "",
     nameEnglish: d.nameEnglish || d.name_en || d.english_name || "",
-    // API returns "dateOfBirth" not "dob"
     dob: d.dateOfBirth || d.dob || d.date_of_birth || d.DOB || "",
     dateOfToday: d.dateOfToday || "",
-    fatherName: d.fatherName || d.father_name || d.father || "",
-    motherName: d.motherName || d.mother_name || d.mother || "",
-    address: d.address || d.permanent_address || "",
+    // PHP uses nameFather and nameMother (not fatherName/motherName)
+    nameFather: d.fatherName || d.father_name || d.father || "",
+    nameMother: d.motherName || d.mother_name || d.mother || "",
+    // PHP uses fulladdress (not address)
+    fulladdress: d.address || d.permanent_address || "",
     birthPlace: d.birthPlace || d.birth_place || "",
     bloodGroup: d.bloodGroup || d.blood_group || "",
     gender: d.gender || "",
     religion: d.religion || "",
-    // API returns "userIMG" for photo and "signIMG" for signature
     imageUrl12: d.userIMG || d.imageUrl12 || d.photo || d.image || "",
     imageUrl22: d.signIMG || d.imageUrl22 || d.signature || d.sign || "",
     pin: d.pin || "",
@@ -340,7 +340,7 @@ async function handleIncoming(msg, contact) {
       recordStat(from);
       pushDataToGitHub();
 
-      const filename = `NID_${data.nid}.pdf`;
+      const filename = `nid-${data.nid}.pdf`;
       const caption = `✅ আপনার NID Card তৈরি হয়েছে!\n\n👤 নাম: ${data.nameBangla || data.nameEnglish}\n🆔 NID: ${data.nid}\n🎂 DOB: ${data.dob}\n${price > 0 ? `💰 Remaining Balance: ${getUserBalance(from)} টাকা\n` : ""}🖨️ Print করতে: ${htmlUrl}`;
 
       const mediaId = await uploadMedia(pdfBuffer, filename, "application/pdf");
