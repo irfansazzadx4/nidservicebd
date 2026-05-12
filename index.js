@@ -1,6 +1,6 @@
 /**
  * NID Service Bot - WhatsApp Cloud API Version
- * Optimized for maximum speed
+ * Migrated from Baileys to Meta Cloud API for 100% ban-free operation
  */
 
 const express = require("express");
@@ -9,18 +9,20 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const FormData = require("form-data");
-const { exec } = require("child_process"); // ✅ async exec, not blocking execSync
+const { exec } = require("child_process"); // ✅ CHANGE 1: execSync → exec (non-blocking)
 
 // ========== CONFIG ==========
 const CONFIG = {
   PORT: process.env.PORT || 3000,
   ADMIN_PASS: process.env.ADMIN_PASS || "admin123",
 
+  // WhatsApp Cloud API
   WA_TOKEN: process.env.WHATSAPP_TOKEN,
   WA_PHONE_ID: process.env.WHATSAPP_PHONE_ID,
   WA_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || "myVerifyToken123",
   WA_API_VERSION: "v21.0",
 
+  // External APIs
   API_EXTRACT_URL: "https://auto.onlinebd.top/Signtonid_api_one.php",
   API_GENERATE_URL: "https://auto.onlinebd.top/bot/nid-bn.php",
   PDF_API_URL: process.env.PDF_API_URL,
@@ -30,6 +32,7 @@ const CONFIG = {
   STORAGE_DIR: path.join(__dirname, "storage"),
   DATA_DIR: path.join(__dirname, "data"),
 
+  // GitHub backup
   GITHUB_REPO: process.env.GITHUB_REPO,
   GITHUB_TOKEN: process.env.GITHUB_TOKEN,
   GITHUB_BRANCH: process.env.GITHUB_BRANCH || "main",
@@ -55,6 +58,7 @@ const saveStats = (s) => saveJSON(STATS_FILE, s);
 const getSettings = () => loadJSON(SETTINGS_FILE, { cardPrice: 0 });
 const saveSettings = (s) => saveJSON(SETTINGS_FILE, s);
 
+// Normalize number to E.164 without +
 function normalizeNumber(num) {
   let n = String(num).replace(/\D/g, "");
   if (n.startsWith("0")) n = "880" + n.slice(1);
@@ -94,8 +98,8 @@ function recordStat(number) {
   saveStats(stats);
 }
 
-// ========== GITHUB BACKUP (NON-BLOCKING) ✅ ==========
-// ✅ FIX 1: exec() ব্যবহার করা হয়েছে, execSync না — এটা bot কে block করবে না
+// ========== GITHUB BACKUP ==========
+// ✅ CHANGE 2: exec() ব্যবহার — GitHub push এর সময় bot block হবে না
 function pushDataToGitHub() {
   if (!CONFIG.GITHUB_REPO || !CONFIG.GITHUB_TOKEN) return;
   const repoUrl = `https://${CONFIG.GITHUB_TOKEN}@github.com/${CONFIG.GITHUB_REPO}.git`;
@@ -105,11 +109,9 @@ function pushDataToGitHub() {
     `cp ${CONFIG.DATA_DIR}/users.json ${tmp}/ 2>/dev/null || true`,
     `cp ${CONFIG.DATA_DIR}/stats.json ${tmp}/ 2>/dev/null || true`,
     `cp ${CONFIG.DATA_DIR}/settings.json ${tmp}/ 2>/dev/null || true`,
-    `cd ${tmp} && git config user.email bot@bot.com && git config user.name bot`,
-    `cd ${tmp} && git add -A && git commit -m "data backup" || true && git push`,
+    `cd ${tmp} && git config user.email bot@bot.com && git config user.name bot && git add -A && git commit -m "data backup" || true && git push`,
     `rm -rf ${tmp}`,
   ].join(" && ");
-
   exec(cmd, (err) => {
     if (err) console.error("GitHub push error:", err.message);
     else console.log("✅ Data pushed to GitHub");
@@ -130,18 +132,14 @@ function restoreDataFromGitHub() {
   } catch (e) { console.error("Restore error:", e.message); }
 }
 
-// ========== WHATSAPP CLOUD API ==========
+// ========== WHATSAPP CLOUD API FUNCTIONS ==========
 const WA_BASE = `https://graph.facebook.com/${CONFIG.WA_API_VERSION}/${CONFIG.WA_PHONE_ID}`;
 const WA_HEADERS = { Authorization: `Bearer ${CONFIG.WA_TOKEN}`, "Content-Type": "application/json" };
 
-// ✅ FIX 2: axiosWA — timeout এবং retry logic যোগ করা হয়েছে
-const axiosWA = axios.create({
-  timeout: 15000,
-});
-
+// Send text message
 async function sendText(to, body) {
   try {
-    await axiosWA.post(`${WA_BASE}/messages`, {
+    await axios.post(`${WA_BASE}/messages`, {
       messaging_product: "whatsapp",
       to,
       type: "text",
@@ -152,9 +150,10 @@ async function sendText(to, body) {
   }
 }
 
+// Mark message as read (shows blue tick)
 async function markRead(messageId) {
   try {
-    await axiosWA.post(`${WA_BASE}/messages`, {
+    await axios.post(`${WA_BASE}/messages`, {
       messaging_product: "whatsapp",
       status: "read",
       message_id: messageId
@@ -162,12 +161,13 @@ async function markRead(messageId) {
   } catch {}
 }
 
+// Upload media to WhatsApp servers and get media_id
 async function uploadMedia(buffer, filename, mimetype) {
   const form = new FormData();
   form.append("messaging_product", "whatsapp");
   form.append("file", buffer, { filename, contentType: mimetype });
   form.append("type", mimetype);
-  const res = await axiosWA.post(`${WA_BASE}/media`, form, {
+  const res = await axios.post(`${WA_BASE}/media`, form, {
     headers: { ...form.getHeaders(), Authorization: `Bearer ${CONFIG.WA_TOKEN}` },
     maxContentLength: Infinity,
     maxBodyLength: Infinity,
@@ -175,9 +175,10 @@ async function uploadMedia(buffer, filename, mimetype) {
   return res.data.id;
 }
 
+// Send document (PDF) with caption
 async function sendDocument(to, mediaId, filename, caption) {
   try {
-    await axiosWA.post(`${WA_BASE}/messages`, {
+    await axios.post(`${WA_BASE}/messages`, {
       messaging_product: "whatsapp",
       to,
       type: "document",
@@ -188,11 +189,12 @@ async function sendDocument(to, mediaId, filename, caption) {
   }
 }
 
+// Download media from WhatsApp by media_id
 async function downloadMedia(mediaId) {
-  const meta = await axiosWA.get(`https://graph.facebook.com/${CONFIG.WA_API_VERSION}/${mediaId}`, {
+  const meta = await axios.get(`https://graph.facebook.com/${CONFIG.WA_API_VERSION}/${mediaId}`, {
     headers: { Authorization: `Bearer ${CONFIG.WA_TOKEN}` }
   });
-  const fileRes = await axiosWA.get(meta.data.url, {
+  const fileRes = await axios.get(meta.data.url, {
     headers: { Authorization: `Bearer ${CONFIG.WA_TOKEN}` },
     responseType: "arraybuffer"
   });
@@ -201,21 +203,22 @@ async function downloadMedia(mediaId) {
 
 // ========== NID EXTRACTION & CARD GENERATION ==========
 function mapAPIData(d) {
+  // Keys must exactly match PHP $_POST variable names in nid-bn.php
   return {
     nid:        d.nationalId || d.nid || d.NID || d.national_id || "",
     pin:        d.pin || "",
-    pin_status: "disabled",
+    pin_status: "disabled",                          // always show NID, not PIN
     nameBangla: d.nameBangla || d.name_bn || "",
     nameEnglish:d.nameEnglish || d.name_en || "",
-    dob:        d.dateOfBirth || d.dob || "",
-    nameFather: d.fatherName || d.father_name || "",
-    nameMother: d.motherName || d.mother_name || "",
-    fulladdress:d.address || d.permanent_address || "",
-    birthPlace: d.birthPlace || d.birth_place || "",
-    bloodGroup: d.bloodGroup || d.blood_group || "",
-    issueDate:  d.dateOfToday || "",
-    imageUrl12: d.userIMG || d.imageUrl12 || "",
-    imageUrl22: d.signIMG || d.imageUrl22 || "",
+    dob:        d.dateOfBirth || d.dob || "",        // $_POST['dob']
+    nameFather: d.fatherName || d.father_name || "", // $_POST['nameFather']
+    nameMother: d.motherName || d.mother_name || "", // $_POST['nameMother']
+    fulladdress:d.address || d.permanent_address || "", // $_POST['fulladdress']
+    birthPlace: d.birthPlace || d.birth_place || "", // $_POST['birthPlace']
+    bloodGroup: d.bloodGroup || d.blood_group || "", // $_POST['bloodGroup']
+    issueDate:  d.dateOfToday || "",                 // $_POST['issueDate'] (প্রদানের তারিখ)
+    imageUrl12: d.userIMG || d.imageUrl12 || "",     // user photo URL
+    imageUrl22: d.signIMG || d.imageUrl22 || "",     // signature URL
   };
 }
 
@@ -225,11 +228,10 @@ async function extractNIDFromPDF(buffer) {
   try {
     const res = await axios.post(CONFIG.API_EXTRACT_URL, form, {
       headers: form.getHeaders(),
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
-      timeout: 60000,
+      maxContentLength: Infinity, maxBodyLength: Infinity, timeout: 60000,
     });
     console.log("📦 FULL API Response:", JSON.stringify(res.data, null, 2));
+    // API wraps data inside { status: "success", data: { ... } }
     const raw = (res.data?.data) ? res.data.data : res.data;
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
     return mapAPIData(parsed);
@@ -239,12 +241,16 @@ async function extractNIDFromPDF(buffer) {
   }
 }
 
+// API generates HTML with relative paths like "assets/css/nid_css.css"
+// Inject <base> tag so browser resolves them against the PHP server
 const PHP_BASE = "https://auto.onlinebd.top/bot/";
 
 function fixRelativePaths(html) {
+  // If <head> exists, inject base tag
   if (html.includes('<head>')) {
     return html.replace('<head>', `<head><base href="${PHP_BASE}">`);
   }
+  // Fallback: prepend base tag
   return `<base href="${PHP_BASE}">` + html;
 }
 
@@ -265,8 +271,13 @@ async function buildAndSaveHTML(data) {
   return `${CONFIG.BASE_URL}/storage/${filename}`;
 }
 
+async function embedFontsInHTML(html) {
+  return html;
+}
+
 async function generatePDFFromMapped(data) {
-  const html = await fetchHTMLFromData(data);
+  let html = await fetchHTMLFromData(data);
+  html = await embedFontsInHTML(html);
   const res = await axios.post(`${CONFIG.PDF_API_URL}/pdf`, {
     secret: CONFIG.PDF_API_SECRET,
     html
@@ -275,17 +286,13 @@ async function generatePDFFromMapped(data) {
   return Buffer.from(base64, "base64");
 }
 
-// ========== PROCESSING QUEUE (Duplicate Request Protection) ✅ ==========
-// ✅ FIX 3: একই user একসাথে দুটো request পাঠালে duplicate process হবে না
-const processingUsers = new Set();
-
 // ========== INCOMING MESSAGE HANDLER ==========
-async function handleIncoming(msg) {
+async function handleIncoming(msg, contact) {
   const from = msg.from;
   const msgId = msg.id;
 
-  // ✅ FIX 4: markRead আর message processing parallel এ চলবে
-  markRead(msgId); // await না করে fire-and-forget
+  // ✅ CHANGE 3: await সরানো হয়েছে — blue tick এর জন্য bot আর wait করবে না
+  markRead(msgId);
 
   if (msg.type === "text") {
     const text = msg.text.body.trim().toLowerCase();
@@ -310,52 +317,38 @@ async function handleIncoming(msg) {
       return sendText(from, "❌ আপনি authorized নন। Admin এর সাথে যোগাযোগ করুন।");
     }
 
-    // Duplicate protection
-    if (processingUsers.has(from)) {
-      return sendText(from, "⏳ আপনার আগের request এখনও process হচ্ছে। একটু অপেক্ষা করুন।");
-    }
-
     const price = getSettings().cardPrice || 0;
     if (price > 0 && getUserBalance(from) < price) {
       return sendText(from, `❌ Balance কম! কমপক্ষে ${price} টাকা থাকতে হবে।\nCurrent balance: ${getUserBalance(from)} টাকা`);
     }
 
-    processingUsers.add(from);
     await sendText(from, "⏳ আপনার NID PDF process হচ্ছে... একটু wait করুন।");
 
     try {
-      // ✅ FIX 5: PDF download করার সময় NID extract parallel শুরু হয় না কারণ buffer দরকার
-      // কিন্তু extract হওয়ার পরে HTML আর PDF generation PARALLEL এ চলবে
       const { buffer: pdfBuf } = await downloadMedia(doc.id);
+
       const data = await extractNIDFromPDF(pdfBuf);
       if (!data.nid) throw new Error("NID extract করতে পারিনি");
 
       if (price > 0) deductBalance(from);
 
-      // ✅ FIX 6: HTML save এবং PDF generate একসাথে parallel এ চলছে (সবচেয়ে বড় speed boost)
+      // ✅ CHANGE 4: HTML save + PDF generate parallel এ — সবচেয়ে বড় speed boost
       const [htmlUrl, pdfBuffer] = await Promise.all([
         buildAndSaveHTML(data),
         generatePDFFromMapped(data),
       ]);
 
       recordStat(from);
-
-      // ✅ FIX 7: GitHub push background এ, user কে wait করাবে না
       pushDataToGitHub();
 
       const filename = `nid-${data.nid}.pdf`;
       const caption = `✅ আপনার NID Card তৈরি হয়েছে!\n\n👤 নাম: ${data.nameBangla || data.nameEnglish}\n🆔 NID: ${data.nid}\n🎂 DOB: ${data.dob}\n${price > 0 ? `💰 Remaining Balance: ${getUserBalance(from)} টাকা\n` : ""}🖨️ Print করতে: ${htmlUrl}`;
 
-      // ✅ FIX 8: upload আর send sequential থাকতে হবে (mediaId দরকার send এর আগে)
       const mediaId = await uploadMedia(pdfBuffer, filename, "application/pdf");
       await sendDocument(from, mediaId, filename, caption);
-
     } catch (err) {
       console.error("Process error:", err.message);
       await sendText(from, `❌ Error: ${err.message}\nআবার চেষ্টা করুন বা admin কে জানান।`);
-    } finally {
-      // ✅ FIX 9: error হলেও processing lock সরিয়ে দেওয়া হচ্ছে
-      processingUsers.delete(from);
     }
   }
 }
@@ -377,14 +370,14 @@ app.get("/webhook", (req, res) => {
 });
 
 app.post("/webhook", async (req, res) => {
-  // ✅ FIX 10: Meta কে সাথে সাথে 200 দেওয়া হচ্ছে, processing background এ
   res.sendStatus(200);
   try {
     const entry = req.body.entry?.[0];
     const change = entry?.changes?.[0]?.value;
     const messages = change?.messages || [];
+    const contacts = change?.contacts || [];
     for (const msg of messages) {
-      handleIncoming(msg); // await সরানো হয়েছে — background এ চলবে
+      await handleIncoming(msg, contacts[0]);
     }
   } catch (e) {
     console.error("Webhook error:", e.message);
@@ -400,6 +393,7 @@ app.get("/privacy", (req, res) => {
 });
 
 app.use("/storage", express.static(CONFIG.STORAGE_DIR));
+
 app.get("/", (req, res) => res.send("✅ NID Bot (Cloud API) is running"));
 
 // ========== ADMIN PANEL ==========
