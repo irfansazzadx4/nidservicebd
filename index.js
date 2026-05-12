@@ -203,43 +203,44 @@ async function downloadMedia(mediaId) {
 // ========== NID EXTRACTION & CARD GENERATION ==========
 function mapAPIData(d) {
   return {
-    nid: d.nid || d.NID || d.national_id || "",
+    // API returns "nationalId" not "nid"
+    nid: d.nationalId || d.nid || d.NID || d.national_id || "",
     nameBangla: d.nameBangla || d.name_bn || d.bangla_name || "",
     nameEnglish: d.nameEnglish || d.name_en || d.english_name || "",
-    dob: d.dob || d.date_of_birth || d.DOB || "",
+    // API returns "dateOfBirth" not "dob"
+    dob: d.dateOfBirth || d.dob || d.date_of_birth || d.DOB || "",
+    dateOfToday: d.dateOfToday || "",
     fatherName: d.fatherName || d.father_name || d.father || "",
     motherName: d.motherName || d.mother_name || d.mother || "",
     address: d.address || d.permanent_address || "",
     birthPlace: d.birthPlace || d.birth_place || "",
     bloodGroup: d.bloodGroup || d.blood_group || "",
-    imageUrl12: d.imageUrl12 || d.photo || d.image || "",
-    signature: d.signature || d.sign || "",
+    gender: d.gender || "",
+    religion: d.religion || "",
+    // API returns "userIMG" for photo and "signIMG" for signature
+    imageUrl12: d.userIMG || d.imageUrl12 || d.photo || d.image || "",
+    imageUrl22: d.signIMG || d.imageUrl22 || d.signature || d.sign || "",
     pin: d.pin || "",
   };
 }
 
-async function extractNIDFromPDF(pdfBuffer) {
-    const form = new FormData();
-    form.append("pdf", pdfBuffer, { filename: "nid.pdf", contentType: "application/pdf" });
-    
-    console.log(`📤 Sending PDF to extract API (${pdfBuffer.length} bytes)`);
-    
-    try {
-        const res = await axios.post(CONFIG.API_EXTRACT_URL, form, {
-            headers: form.getHeaders(), 
-            timeout: 60000,
-            maxContentLength: Infinity,
-            maxBodyLength: Infinity,
-        });
-        console.log("📦 FULL API Response:", JSON.stringify(res.data, null, 2));
-        return res.data;
-    } catch (err) {
-        console.error("❌ Extract API failed:");
-        console.error("   Status:", err.response?.status);
-        console.error("   Data  :", JSON.stringify(err.response?.data));
-        console.error("   Msg   :", err.message);
-        throw new Error("Extract API: " + (err.response?.data?.message || err.message));
-    }
+async function extractNIDFromPDF(buffer) {
+  const form = new FormData();
+  form.append("pdf", buffer, { filename: "nid.pdf", contentType: "application/pdf" });
+  try {
+    const res = await axios.post(CONFIG.API_EXTRACT_URL, form, {
+      headers: form.getHeaders(),
+      maxContentLength: Infinity, maxBodyLength: Infinity, timeout: 60000,
+    });
+    console.log("📦 FULL API Response:", JSON.stringify(res.data, null, 2));
+    // API wraps data inside { status: "success", data: { ... } }
+    const raw = (res.data?.data) ? res.data.data : res.data;
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return mapAPIData(parsed);
+  } catch (err) {
+    console.error("❌ Extract API failed:", err.response?.status, JSON.stringify(err.response?.data), err.message);
+    throw new Error("Extract API: " + (err.response?.data?.message || err.message));
+  }
 }
 
 function fixRelativePaths(html) {
