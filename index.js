@@ -218,14 +218,28 @@ function mapAPIData(d) {
   };
 }
 
-async function extractNIDFromPDF(buffer) {
-  const form = new FormData();
-  form.append("pdf", buffer, { filename: "nid.pdf", contentType: "application/pdf" });
-  const res = await axios.post(CONFIG.API_EXTRACT_URL, form, {
-    headers: form.getHeaders(),
-    maxContentLength: Infinity, maxBodyLength: Infinity, timeout: 60000,
-  });
-  return mapAPIData(typeof res.data === "string" ? JSON.parse(res.data) : res.data);
+async function extractNIDFromPDF(pdfBuffer) {
+    const form = new FormData();
+    form.append("pdf", pdfBuffer, { filename: "nid.pdf", contentType: "application/pdf" });
+    
+    console.log(`📤 Sending PDF to extract API (${pdfBuffer.length} bytes)`);
+    
+    try {
+        const res = await axios.post(CONFIG.API_EXTRACT_URL, form, {
+            headers: form.getHeaders(), 
+            timeout: 60000,
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+        });
+        console.log("📦 FULL API Response:", JSON.stringify(res.data, null, 2));
+        return res.data;
+    } catch (err) {
+        console.error("❌ Extract API failed:");
+        console.error("   Status:", err.response?.status);
+        console.error("   Data  :", JSON.stringify(err.response?.data));
+        console.error("   Msg   :", err.message);
+        throw new Error("Extract API: " + (err.response?.data?.message || err.message));
+    }
 }
 
 function fixRelativePaths(html) {
