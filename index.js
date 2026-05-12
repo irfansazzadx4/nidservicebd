@@ -245,11 +245,12 @@ async function extractNIDFromPDF(buffer) {
 const PHP_BASE = "https://auto.onlinebd.top/bot/";
 
 function fixRelativePaths(html) {
-  // If <head> exists, inject base tag
+  // /fonts/ absolute path fix করো
+  html = html.replace(/url\(\/fonts\//g, 'url(https://auto.onlinebd.top/fonts/');
+  
   if (html.includes('<head>')) {
     return html.replace('<head>', `<head><base href="${PHP_BASE}">`);
   }
-  // Fallback: prepend base tag
   return `<base href="${PHP_BASE}">` + html;
 }
 
