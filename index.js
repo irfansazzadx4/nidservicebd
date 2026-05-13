@@ -1,6 +1,6 @@
 /**
  * NID Service Bot - WhatsApp Cloud API Version
- * Migrated from Baileys to Meta Cloud API for 100% ban-free operation
+ * Fast MongoDB backup, recharge/deduct, font embed, 10min file delete
  */
 
 const express = require("express");
@@ -9,20 +9,17 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const FormData = require("form-data");
-const { exec } = require("child_process");
 
 // ========== CONFIG ==========
 const CONFIG = {
   PORT: process.env.PORT || 3000,
   ADMIN_PASS: process.env.ADMIN_PASS || "admin123",
 
-  // WhatsApp Cloud API
   WA_TOKEN: process.env.WHATSAPP_TOKEN,
   WA_PHONE_ID: process.env.WHATSAPP_PHONE_ID,
   WA_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || "myVerifyToken123",
   WA_API_VERSION: "v21.0",
 
-  // External APIs
   API_EXTRACT_URL: "https://auto.onlinebd.top/Signtonid_api_one.php",
   API_GENERATE_URL: "https://auto.onlinebd.top/bot/nid-bn.php",
   PDF_API_URL: process.env.PDF_API_URL,
@@ -32,17 +29,15 @@ const CONFIG = {
   STORAGE_DIR: path.join(__dirname, "storage"),
   DATA_DIR: path.join(__dirname, "data"),
 
-  // GitHub backup
-  GITHUB_REPO: process.env.GITHUB_REPO,
-  GITHUB_TOKEN: process.env.GITHUB_TOKEN,
-  GITHUB_BRANCH: process.env.GITHUB_BRANCH || "main",
+  // MongoDB Atlas (fast backup)
+  MONGO_URI: process.env.MONGO_URI, // mongodb+srv://user:pass@cluster.mongodb.net/nidbot
 };
 
 if (!fs.existsSync(CONFIG.STORAGE_DIR)) fs.mkdirSync(CONFIG.STORAGE_DIR, { recursive: true });
 if (!fs.existsSync(CONFIG.DATA_DIR)) fs.mkdirSync(CONFIG.DATA_DIR, { recursive: true });
 
-const USERS_FILE = path.join(CONFIG.DATA_DIR, "users.json");
-const STATS_FILE = path.join(CONFIG.DATA_DIR, "stats.json");
+const USERS_FILE    = path.join(CONFIG.DATA_DIR, "users.json");
+const STATS_FILE    = path.join(CONFIG.DATA_DIR, "stats.json");
 const SETTINGS_FILE = path.join(CONFIG.DATA_DIR, "settings.json");
 
 // ========== HELPERS ==========
@@ -51,12 +46,12 @@ const loadJSON = (f, def) => {
 };
 const saveJSON = (f, d) => fs.writeFileSync(f, JSON.stringify(d, null, 2));
 
-const getUsers = () => loadJSON(USERS_FILE, []);
-const saveUsers = (u) => saveJSON(USERS_FILE, u);
-const getStats = () => loadJSON(STATS_FILE, {});
-const saveStats = (s) => saveJSON(STATS_FILE, s);
+const getUsers    = () => loadJSON(USERS_FILE,    []);
+const saveUsers   = (u) => saveJSON(USERS_FILE,   u);
+const getStats    = () => loadJSON(STATS_FILE,    {});
+const saveStats   = (s) => saveJSON(STATS_FILE,   s);
 const getSettings = () => loadJSON(SETTINGS_FILE, { cardPrice: 0 });
-const saveSettings = (s) => saveJSON(SETTINGS_FILE, s);
+const saveSettings= (s) => saveJSON(SETTINGS_FILE, s);
 
 function normalizeNumber(num) {
   let n = String(num).replace(/\D/g, "");
@@ -97,62 +92,100 @@ function recordStat(number) {
   saveStats(stats);
 }
 
-// ========== GITHUB BACKUP ==========
-function pushDataToGitHub() {
-  if (!CONFIG.GITHUB_REPO || !CONFIG.GITHUB_TOKEN) return;
-  const repoUrl = `https://${CONFIG.GITHUB_TOKEN}@github.com/${CONFIG.GITHUB_REPO}.git`;
-  const tmp = "/tmp/databackup_" + Date.now();
-  const cmd = [
-    `git clone --depth 1 -b ${CONFIG.GITHUB_BRANCH} ${repoUrl} ${tmp}`,
-    `cp ${CONFIG.DATA_DIR}/users.json ${tmp}/ 2>/dev/null || true`,
-    `cp ${CONFIG.DATA_DIR}/stats.json ${tmp}/ 2>/dev/null || true`,
-    `cp ${CONFIG.DATA_DIR}/settings.json ${tmp}/ 2>/dev/null || true`,
-    `cd ${tmp} && git config user.email bot@bot.com && git config user.name bot && git add -A && git commit -m "data backup" || true && git push`,
-    `rm -rf ${tmp}`,
-  ].join(" && ");
-  exec(cmd, (err) => {
-    if (err) console.error("GitHub push error:", err.message);
-    else console.log("✅ Data pushed to GitHub");
-  });
-}
+// ========== MONGODB BACKUP (fast, instant) ==========
+// MongoDB REST API (Data API) ব্যবহার করা হচ্ছে — npm package দরকার নেই
+// Render এ MONGO_URI env variable সেট করুন
+// Format: mongodb+srv://user:pass@cluster.mongodb.net/nidbot
 
-function restoreDataFromGitHub() {
-  if (!CONFIG.GITHUB_REPO || !CONFIG.GITHUB_TOKEN) return;
+let mongoClient = null;
+
+async function getMongoClient() {
+  if (mongoClient) return mongoClient;
+  if (!CONFIG.MONGO_URI) return null;
   try {
-    ["users.json", "stats.json", "settings.json"].forEach(f => {
-      const local = path.join(CONFIG.DATA_DIR, f);
-      if (fs.existsSync(local)) return;
-      const url = `https://raw.githubusercontent.com/${CONFIG.GITHUB_REPO}/${CONFIG.GITHUB_BRANCH}/${f}`;
-      axios.get(url, { headers: { Authorization: `token ${CONFIG.GITHUB_TOKEN}` } })
-        .then(r => fs.writeFileSync(local, JSON.stringify(r.data, null, 2)))
-        .catch(() => {});
-    });
-  } catch (e) { console.error("Restore error:", e.message); }
+    const { MongoClient } = require("mongodb");
+    mongoClient = new MongoClient(CONFIG.MONGO_URI);
+    await mongoClient.connect();
+    console.log("✅ MongoDB connected");
+    return mongoClient;
+  } catch (e) {
+    console.error("MongoDB connect error:", e.message);
+    return null;
+  }
 }
 
-// ========== WHATSAPP CLOUD API FUNCTIONS ==========
-const WA_BASE = `https://graph.facebook.com/${CONFIG.WA_API_VERSION}/${CONFIG.WA_PHONE_ID}`;
+async function saveToMongo(collection, key, data) {
+  try {
+    const client = await getMongoClient();
+    if (!client) return;
+    const db = client.db("nidbot");
+    await db.collection(collection).replaceOne({ _id: key }, { _id: key, data }, { upsert: true });
+  } catch (e) {
+    console.error("MongoDB save error:", e.message);
+  }
+}
+
+async function loadFromMongo(collection, key) {
+  try {
+    const client = await getMongoClient();
+    if (!client) return null;
+    const db = client.db("nidbot");
+    const doc = await db.collection(collection).findOne({ _id: key });
+    return doc ? doc.data : null;
+  } catch (e) {
+    console.error("MongoDB load error:", e.message);
+    return null;
+  }
+}
+
+// ✅ Fast backup — সাথে সাথে MongoDB এ save হয়
+async function backupData() {
+  try {
+    await Promise.all([
+      saveToMongo("backups", "users",    getUsers()),
+      saveToMongo("backups", "stats",    getStats()),
+      saveToMongo("backups", "settings", getSettings()),
+    ]);
+    console.log("✅ MongoDB backup done");
+  } catch (e) {
+    console.error("Backup error:", e.message);
+  }
+}
+
+// ✅ Restore from MongoDB on startup
+async function restoreData() {
+  try {
+    const [users, stats, settings] = await Promise.all([
+      loadFromMongo("backups", "users"),
+      loadFromMongo("backups", "stats"),
+      loadFromMongo("backups", "settings"),
+    ]);
+    if (users    && !fs.existsSync(USERS_FILE))    saveUsers(users);
+    if (stats    && !fs.existsSync(STATS_FILE))    saveStats(stats);
+    if (settings && !fs.existsSync(SETTINGS_FILE)) saveSettings(settings);
+    if (users || stats || settings) console.log("✅ Data restored from MongoDB");
+    else console.log("ℹ️ No MongoDB data found — starting fresh");
+  } catch (e) {
+    console.error("Restore error:", e.message);
+  }
+}
+
+// ========== WHATSAPP CLOUD API ==========
+const WA_BASE    = `https://graph.facebook.com/${CONFIG.WA_API_VERSION}/${CONFIG.WA_PHONE_ID}`;
 const WA_HEADERS = { Authorization: `Bearer ${CONFIG.WA_TOKEN}`, "Content-Type": "application/json" };
 
 async function sendText(to, body) {
   try {
     await axios.post(`${WA_BASE}/messages`, {
-      messaging_product: "whatsapp",
-      to,
-      type: "text",
-      text: { body }
+      messaging_product: "whatsapp", to, type: "text", text: { body }
     }, { headers: WA_HEADERS });
-  } catch (e) {
-    console.error("sendText error:", e.response?.data || e.message);
-  }
+  } catch (e) { console.error("sendText error:", e.response?.data || e.message); }
 }
 
 async function markRead(messageId) {
   try {
     await axios.post(`${WA_BASE}/messages`, {
-      messaging_product: "whatsapp",
-      status: "read",
-      message_id: messageId
+      messaging_product: "whatsapp", status: "read", message_id: messageId
     }, { headers: WA_HEADERS });
   } catch {}
 }
@@ -164,8 +197,7 @@ async function uploadMedia(buffer, filename, mimetype) {
   form.append("type", mimetype);
   const res = await axios.post(`${WA_BASE}/media`, form, {
     headers: { ...form.getHeaders(), Authorization: `Bearer ${CONFIG.WA_TOKEN}` },
-    maxContentLength: Infinity,
-    maxBodyLength: Infinity,
+    maxContentLength: Infinity, maxBodyLength: Infinity,
   });
   return res.data.id;
 }
@@ -173,14 +205,10 @@ async function uploadMedia(buffer, filename, mimetype) {
 async function sendDocument(to, mediaId, filename, caption) {
   try {
     await axios.post(`${WA_BASE}/messages`, {
-      messaging_product: "whatsapp",
-      to,
-      type: "document",
+      messaging_product: "whatsapp", to, type: "document",
       document: { id: mediaId, filename, caption }
     }, { headers: WA_HEADERS });
-  } catch (e) {
-    console.error("sendDocument error:", e.response?.data || e.message);
-  }
+  } catch (e) { console.error("sendDocument error:", e.response?.data || e.message); }
 }
 
 async function downloadMedia(mediaId) {
@@ -194,7 +222,7 @@ async function downloadMedia(mediaId) {
   return { buffer: Buffer.from(fileRes.data), mimetype: meta.data.mime_type };
 }
 
-// ========== NID EXTRACTION & CARD GENERATION ==========
+// ========== NID EXTRACTION ==========
 function mapAPIData(d) {
   return {
     nid:        d.nationalId || d.nid || d.NID || d.national_id || "",
@@ -236,19 +264,17 @@ async function extractNIDFromPDF(buffer) {
 function fixRelativePaths(html) {
   const BASE = "https://auto.onlinebd.top/bot";
   const patterns = [
-    [/(src\s*=\s*["'])(assets\/)/gi,   `$1${BASE}/assets/`],
-    [/(href\s*=\s*["'])(assets\/)/gi,  `$1${BASE}/assets/`],
-    [/(src\s*=\s*["'])(photo\/)/gi,    `$1${BASE}/photo/`],
-    [/(src\s*=\s*)(assets\/)/gi,       `$1${BASE}/assets/`],
-    [/(href\s*=\s*)(assets\/)/gi,      `$1${BASE}/assets/`],
-    [/(src\s*=\s*)(photo\/)/gi,        `$1${BASE}/photo/`],
-    [/(url\s*\(\s*["']?)(assets\/)/gi, `$1${BASE}/assets/`],
-    [/(url\s*\(\s*["']?)(photo\/)/gi,  `$1${BASE}/photo/`],
-    // /fonts/ absolute path fix
+    [/(src\s*=\s*["'])(assets\/)/gi,    `$1${BASE}/assets/`],
+    [/(href\s*=\s*["'])(assets\/)/gi,   `$1${BASE}/assets/`],
+    [/(src\s*=\s*["'])(photo\/)/gi,     `$1${BASE}/photo/`],
+    [/(src\s*=\s*)(assets\/)/gi,        `$1${BASE}/assets/`],
+    [/(href\s*=\s*)(assets\/)/gi,       `$1${BASE}/assets/`],
+    [/(src\s*=\s*)(photo\/)/gi,         `$1${BASE}/photo/`],
+    [/(url\s*\(\s*["']?)(assets\/)/gi,  `$1${BASE}/assets/`],
+    [/(url\s*\(\s*["']?)(photo\/)/gi,   `$1${BASE}/photo/`],
     [/(url\s*\(\s*["']?)(\/fonts\/)/gi, `$1https://auto.onlinebd.top/fonts/`],
   ];
   for (const [r, rep] of patterns) html = html.replace(r, rep);
-  // double path fix
   const doubled = new RegExp(BASE.replace(/\./g, '\\.') + '/' + BASE.replace(/\./g, '\\.').replace('https://', ''), 'g');
   html = html.replace(doubled, BASE);
   return html;
@@ -308,33 +334,27 @@ async function buildAndSaveHTML(data) {
 
 async function generatePDFFromMapped(data) {
   let html = await fetchHTMLFromData(data);
-  // ✅ Font embed করা হচ্ছে PDF এর জন্য
   html = await embedFontsInHTML(html);
   console.log(`✅ Fonts embedded, HTML: ${html.length} chars`);
-
   const res = await axios.post(`${CONFIG.PDF_API_URL}/pdf`, {
-    secret: CONFIG.PDF_API_SECRET,
-    html
+    secret: CONFIG.PDF_API_SECRET, html
   }, { timeout: 90000 });
   const base64 = res.data.pdf || res.data.base64 || res.data;
   return Buffer.from(base64, "base64");
 }
 
-// ========== INCOMING MESSAGE HANDLER ==========
+// ========== MESSAGE HANDLER ==========
 async function handleIncoming(msg, contact) {
-  const from = msg.from;
+  const from  = msg.from;
   const msgId = msg.id;
-
   markRead(msgId);
 
   if (msg.type === "text") {
     const text = msg.text.body.trim().toLowerCase();
-    if (text === ".ping" || text === "ping") {
-      return sendText(from, "🟢 Pong! Bot সচল আছে।");
-    }
+    if (text === ".ping" || text === "ping") return sendText(from, "🟢 Pong! Bot সচল আছে।");
     if (text === ".status" || text === "status") {
       if (!isAllowed(from)) return sendText(from, "❌ আপনি authorized নন। Admin এর সাথে যোগাযোগ করুন।");
-      const bal = getUserBalance(from);
+      const bal   = getUserBalance(from);
       const price = getSettings().cardPrice || 0;
       return sendText(from, `✅ আপনি authorized।\n💰 Balance: ${bal} টাকা\n💳 Card Price: ${price} টাকা`);
     }
@@ -343,12 +363,8 @@ async function handleIncoming(msg, contact) {
 
   if (msg.type === "document") {
     const doc = msg.document;
-    if (!doc.mime_type?.includes("pdf")) {
-      return sendText(from, "❌ শুধু PDF file পাঠাতে হবে।");
-    }
-    if (!isAllowed(from)) {
-      return sendText(from, "❌ আপনি authorized নন। Admin এর সাথে যোগাযোগ করুন।");
-    }
+    if (!doc.mime_type?.includes("pdf")) return sendText(from, "❌ শুধু PDF file পাঠাতে হবে।");
+    if (!isAllowed(from)) return sendText(from, "❌ আপনি authorized নন। Admin এর সাথে যোগাযোগ করুন।");
 
     const price = getSettings().cardPrice || 0;
     if (price > 0 && getUserBalance(from) < price) {
@@ -359,23 +375,21 @@ async function handleIncoming(msg, contact) {
 
     try {
       const { buffer: pdfBuf } = await downloadMedia(doc.id);
-
       const data = await extractNIDFromPDF(pdfBuf);
       if (!data.nid) throw new Error("NID extract করতে পারিনি");
 
       if (price > 0) deductBalance(from);
 
-      // HTML + PDF parallel
       const [htmlUrl, pdfBuffer] = await Promise.all([
         buildAndSaveHTML(data),
         generatePDFFromMapped(data),
       ]);
 
       recordStat(from);
-      pushDataToGitHub();
+      backupData(); // ✅ instant MongoDB backup
 
       const filename = `NID_${data.nid}.pdf`;
-      const caption = `✅ আপনার NID Card তৈরি হয়েছে!\n\n👤 নাম: ${data.nameBangla || data.nameEnglish}\n🆔 NID: ${data.nid}\n🎂 DOB: ${data.dob}\n${price > 0 ? `💰 Remaining Balance: ${getUserBalance(from)} টাকা\n` : ""}🖨️ Print করতে (১০ মিনিট): ${htmlUrl}`;
+      const caption  = `✅ আপনার NID Card তৈরি হয়েছে!\n\n👤 নাম: ${data.nameBangla || data.nameEnglish}\n🆔 NID: ${data.nid}\n🎂 DOB: ${data.dob}\n${price > 0 ? `💰 Remaining Balance: ${getUserBalance(from)} টাকা\n` : ""}🖨️ Print করতে (১০ মিনিট): ${htmlUrl}`;
 
       const mediaId = await uploadMedia(pdfBuffer, filename, "application/pdf");
       await sendDocument(from, mediaId, filename, caption);
@@ -392,8 +406,8 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
+  const mode      = req.query["hub.mode"];
+  const token     = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
   if (mode === "subscribe" && token === CONFIG.WA_VERIFY_TOKEN) {
     console.log("✅ Webhook verified");
@@ -405,23 +419,21 @@ app.get("/webhook", (req, res) => {
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
   try {
-    const entry = req.body.entry?.[0];
-    const change = entry?.changes?.[0]?.value;
+    const entry    = req.body.entry?.[0];
+    const change   = entry?.changes?.[0]?.value;
     const messages = change?.messages || [];
     const contacts = change?.contacts || [];
     for (const msg of messages) {
       await handleIncoming(msg, contacts[0]);
     }
-  } catch (e) {
-    console.error("Webhook error:", e.message);
-  }
+  } catch (e) { console.error("Webhook error:", e.message); }
 });
 
 app.get("/privacy", (req, res) => {
   res.send(`<html><body style="font-family:sans-serif;max-width:700px;margin:40px auto;padding:20px;">
     <h1>Privacy Policy</h1>
     <p>NID Service Bot collects only the NID PDF you send. We process it to generate a card and do not share your data with any third party except the NID extraction service required for processing.</p>
-    <p>Data is stored temporarily and deleted automatically. Contact admin for data deletion requests.</p>
+    <p>Data is stored temporarily and deleted automatically.</p>
   </body></html>`);
 });
 
@@ -432,7 +444,7 @@ app.get("/", (req, res) => res.send("✅ NID Bot (Cloud API) is running"));
 const adminSessions = new Set();
 
 function adminAuth(req, res, next) {
-  const sess = req.cookies?.admin_sess || (req.headers.cookie || "").split(";").map(s => s.trim()).find(s => s.startsWith("admin_sess="))?.split("=")[1];
+  const sess = (req.headers.cookie || "").split(";").map(s => s.trim()).find(s => s.startsWith("admin_sess="))?.split("=")[1];
   if (sess && adminSessions.has(sess)) return next();
   res.redirect("/admin/login");
 }
@@ -465,49 +477,56 @@ app.get("/admin/logout", (req, res) => {
 });
 
 app.get("/admin", adminAuth, (req, res) => {
-  const users = getUsers();
-  const stats = getStats();
+  const users    = getUsers();
+  const stats    = getStats();
   const settings = getSettings();
   const rows = users.map(u => {
     const s = stats[normalizeNumber(u.number)] || { count: 0, lastUsed: "—" };
     return `<tr>
-      <td>${u.number}</td><td>${u.name || "—"}</td>
-      <td>${u.balance || 0}</td>
+      <td>${u.number}</td>
+      <td>${u.name || "—"}</td>
+      <td style="color:${(u.balance||0) < 0 ? 'red' : 'green'};font-weight:bold">${u.balance || 0} ৳</td>
       <td>${u.active !== false ? "✅" : "❌"}</td>
-      <td>${s.count}</td><td>${s.lastUsed || "—"}</td>
+      <td>${s.count}</td>
+      <td style="font-size:11px">${s.lastUsed || "—"}</td>
       <td>
-        <form method="POST" action="/admin/recharge" style="display:inline">
+        <form method="POST" action="/admin/recharge" style="display:inline;white-space:nowrap">
           <input type="hidden" name="number" value="${u.number}"/>
-          <input name="amount" placeholder="৳" style="width:60px"/>
-          <button>Recharge</button>
+          <input name="amount" placeholder="টাকা" type="number" style="width:65px;padding:3px"/>
+          <button name="type" value="add" style="background:#28a745;color:#fff;border:0;padding:4px 8px;border-radius:3px;cursor:pointer">+Add</button>
+          <button name="type" value="remove" style="background:#dc3545;color:#fff;border:0;padding:4px 8px;border-radius:3px;cursor:pointer">-Remove</button>
         </form>
         <form method="POST" action="/admin/toggle" style="display:inline">
           <input type="hidden" name="number" value="${u.number}"/>
-          <button>Toggle</button>
+          <button style="padding:4px 8px;cursor:pointer">Toggle</button>
         </form>
         <form method="POST" action="/admin/delete" style="display:inline">
           <input type="hidden" name="number" value="${u.number}"/>
-          <button onclick="return confirm('Delete?')">🗑️</button>
+          <button onclick="return confirm('Delete?')" style="background:#dc3545;color:#fff;border:0;padding:4px 8px;border-radius:3px;cursor:pointer">🗑️</button>
         </form>
       </td>
     </tr>`;
   }).join("");
 
+  const mongoStatus = CONFIG.MONGO_URI ? "✅ MongoDB" : "❌ MongoDB না (MONGO_URI set করুন)";
+
   res.send(`<html><head><style>
-    body{font-family:sans-serif;max-width:1100px;margin:30px auto;padding:20px}
+    body{font-family:sans-serif;max-width:1200px;margin:30px auto;padding:20px}
     table{width:100%;border-collapse:collapse;margin:15px 0}
     th,td{border:1px solid #ddd;padding:8px;text-align:left;font-size:13px}
     th{background:#0078d4;color:#fff}
-    .card{background:#f9f9f9;padding:15px;margin:10px 0;border-radius:6px}
+    .card{background:#f9f9f9;padding:15px;margin:10px 0;border-radius:6px;border:1px solid #ddd}
     button{padding:5px 10px;cursor:pointer}
+    .status{padding:8px 15px;border-radius:5px;background:#e8f5e9;border:1px solid #c8e6c9;font-size:13px;margin-bottom:10px}
   </style></head><body>
     <h1>📊 NID Bot Admin Panel</h1>
     <div style="text-align:right"><a href="/admin/logout">Logout</a></div>
+    <div class="status">Backup: ${mongoStatus}</div>
 
     <div class="card">
       <h3>⚙️ Settings</h3>
       <form method="POST" action="/admin/settings">
-        Card Price (৳): <input name="cardPrice" value="${settings.cardPrice || 0}" style="width:80px"/>
+        Card Price (৳): <input name="cardPrice" value="${settings.cardPrice || 0}" style="width:80px" type="number"/>
         <button>Save</button>
       </form>
     </div>
@@ -517,17 +536,22 @@ app.get("/admin", adminAuth, (req, res) => {
       <form method="POST" action="/admin/add">
         <input name="number" placeholder="WhatsApp Number (880...)" required/>
         <input name="name" placeholder="Name"/>
-        <input name="balance" placeholder="Initial balance" value="0"/>
+        <input name="balance" placeholder="Initial balance" value="0" type="number" style="width:100px"/>
         <button>Add</button>
       </form>
     </div>
 
-    <h3>👥 Users (${users.length})</h3>
-    <table><tr><th>Number</th><th>Name</th><th>Balance</th><th>Active</th><th>Cards</th><th>Last Used</th><th>Actions</th></tr>${rows}</table>
-
     <div class="card">
-      <form method="POST" action="/admin/backup"><button>📦 Backup to GitHub Now</button></form>
+      <form method="POST" action="/admin/backup" style="display:inline">
+        <button style="background:#17a2b8;color:#fff;border:0;padding:8px 16px;border-radius:4px;cursor:pointer">☁️ MongoDB Backup Now</button>
+      </form>
     </div>
+
+    <h3>👥 Users (${users.length})</h3>
+    <table>
+      <tr><th>Number</th><th>Name</th><th>Balance</th><th>Active</th><th>Cards</th><th>Last Used</th><th>Actions</th></tr>
+      ${rows}
+    </table>
   </body></html>`);
 });
 
@@ -536,81 +560,79 @@ app.post("/admin/add", adminAuth, (req, res) => {
   const { number, name, balance } = req.body;
   const n = normalizeNumber(number);
   if (!users.find(u => normalizeNumber(u.number) === n)) {
-    users.push({ number: n, name: name || "", balance: parseInt(balance) || 0, active: true });
+    users.push({ number: n, name: name || "", balance: parseFloat(balance) || 0, active: true });
     saveUsers(users);
-    pushDataToGitHub();
+    backupData();
   }
   res.redirect("/admin");
 });
 
+// ✅ Recharge — Add (+) এবং Remove (-) দুটোই
 app.post("/admin/recharge", adminAuth, (req, res) => {
-  const users = getUsers();
-  const i = users.findIndex(u => normalizeNumber(u.number) === normalizeNumber(req.body.number));
-  if (i !== -1) {
-    users[i].balance = (users[i].balance || 0) + (parseInt(req.body.amount) || 0);
+  const users  = getUsers();
+  const { number, amount, type } = req.body;
+  const i      = users.findIndex(u => normalizeNumber(u.number) === normalizeNumber(number));
+  const amt    = parseFloat(amount) || 0;
+  if (i !== -1 && amt > 0) {
+    if (type === "remove") {
+      users[i].balance = (users[i].balance || 0) - amt;
+    } else {
+      users[i].balance = (users[i].balance || 0) + amt;
+    }
     saveUsers(users);
-    pushDataToGitHub();
+    backupData(); // instant backup
   }
   res.redirect("/admin");
 });
 
 app.post("/admin/toggle", adminAuth, (req, res) => {
   const users = getUsers();
-  const i = users.findIndex(u => normalizeNumber(u.number) === normalizeNumber(req.body.number));
-  if (i !== -1) {
-    users[i].active = users[i].active === false;
-    saveUsers(users);
-    pushDataToGitHub();
-  }
+  const i     = users.findIndex(u => normalizeNumber(u.number) === normalizeNumber(req.body.number));
+  if (i !== -1) { users[i].active = users[i].active === false; saveUsers(users); backupData(); }
   res.redirect("/admin");
 });
 
 app.post("/admin/delete", adminAuth, (req, res) => {
-  const users = getUsers().filter(u => normalizeNumber(u.number) !== normalizeNumber(req.body.number));
-  saveUsers(users);
-  pushDataToGitHub();
+  saveUsers(getUsers().filter(u => normalizeNumber(u.number) !== normalizeNumber(req.body.number)));
+  backupData();
   res.redirect("/admin");
 });
 
 app.post("/admin/settings", adminAuth, (req, res) => {
-  saveSettings({ cardPrice: parseInt(req.body.cardPrice) || 0 });
-  pushDataToGitHub();
+  saveSettings({ cardPrice: parseFloat(req.body.cardPrice) || 0 });
+  backupData();
   res.redirect("/admin");
 });
 
-app.post("/admin/backup", adminAuth, (req, res) => {
-  pushDataToGitHub();
+app.post("/admin/backup", adminAuth, async (req, res) => {
+  await backupData();
   res.redirect("/admin");
 });
 
 // ========== STARTUP CLEANUP ==========
 function cleanupOldFiles() {
   try {
-    const files = fs.readdirSync(CONFIG.STORAGE_DIR);
     const tenMin = 10 * 60 * 1000;
-    files.forEach(f => {
+    fs.readdirSync(CONFIG.STORAGE_DIR).forEach(f => {
       if (!f.endsWith(".html")) return;
-      const fp = path.join(CONFIG.STORAGE_DIR, f);
+      const fp  = path.join(CONFIG.STORAGE_DIR, f);
       const age = Date.now() - fs.statSync(fp).mtimeMs;
-      if (age > tenMin) {
-        fs.unlinkSync(fp);
-        console.log(`🗑️ Cleaned: ${f}`);
-      }
+      if (age > tenMin) { fs.unlinkSync(fp); console.log(`🗑️ Cleaned: ${f}`); }
     });
   } catch (e) {}
 }
 
 // ========== START ==========
-restoreDataFromGitHub();
-cleanupOldFiles();
+(async () => {
+  await restoreData(); // MongoDB থেকে data restore
+  cleanupOldFiles();
 
-app.listen(CONFIG.PORT, () => {
-  console.log(`🚀 NID Bot (Cloud API) running on port ${CONFIG.PORT}`);
-  console.log(`📡 Webhook URL: ${CONFIG.BASE_URL}/webhook`);
-  console.log(`🔐 Admin Panel: ${CONFIG.BASE_URL}/admin`);
-});
+  app.listen(CONFIG.PORT, () => {
+    console.log(`🚀 NID Bot running on port ${CONFIG.PORT}`);
+    console.log(`📡 Webhook: ${CONFIG.BASE_URL}/webhook`);
+    console.log(`🔐 Admin: ${CONFIG.BASE_URL}/admin`);
+  });
 
-// Self-ping (keep Render awake)
-setInterval(() => {
-  axios.get(CONFIG.BASE_URL).catch(() => {});
-}, 14 * 60 * 1000);
+  // Self-ping
+  setInterval(() => { axios.get(CONFIG.BASE_URL).catch(() => {}); }, 14 * 60 * 1000);
+})();
