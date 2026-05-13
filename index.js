@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const FormData = require("form-data");
-const { execSync } = require("child_process");
+const { exec } = require("child_process");
 
 // ========== CONFIG ==========
 const CONFIG = {
@@ -58,7 +58,6 @@ const saveStats = (s) => saveJSON(STATS_FILE, s);
 const getSettings = () => loadJSON(SETTINGS_FILE, { cardPrice: 0 });
 const saveSettings = (s) => saveJSON(SETTINGS_FILE, s);
 
-// Normalize number to E.164 without +
 function normalizeNumber(num) {
   let n = String(num).replace(/\D/g, "");
   if (n.startsWith("0")) n = "880" + n.slice(1);
@@ -101,20 +100,20 @@ function recordStat(number) {
 // ========== GITHUB BACKUP ==========
 function pushDataToGitHub() {
   if (!CONFIG.GITHUB_REPO || !CONFIG.GITHUB_TOKEN) return;
-  try {
-    const repoUrl = `https://${CONFIG.GITHUB_TOKEN}@github.com/${CONFIG.GITHUB_REPO}.git`;
-    const tmp = "/tmp/databackup_" + Date.now();
-    execSync(`git clone --depth 1 -b ${CONFIG.GITHUB_BRANCH} ${repoUrl} ${tmp}`, { stdio: "ignore" });
-    ["users.json", "stats.json", "settings.json"].forEach(f => {
-      const src = path.join(CONFIG.DATA_DIR, f);
-      if (fs.existsSync(src)) fs.copyFileSync(src, path.join(tmp, f));
-    });
-    execSync(`cd ${tmp} && git config user.email bot@bot.com && git config user.name bot && git add -A && git commit -m "data backup" || true && git push`, { stdio: "ignore" });
-    execSync(`rm -rf ${tmp}`);
-    console.log("✅ Data pushed to GitHub");
-  } catch (e) {
-    console.error("GitHub push error:", e.message);
-  }
+  const repoUrl = `https://${CONFIG.GITHUB_TOKEN}@github.com/${CONFIG.GITHUB_REPO}.git`;
+  const tmp = "/tmp/databackup_" + Date.now();
+  const cmd = [
+    `git clone --depth 1 -b ${CONFIG.GITHUB_BRANCH} ${repoUrl} ${tmp}`,
+    `cp ${CONFIG.DATA_DIR}/users.json ${tmp}/ 2>/dev/null || true`,
+    `cp ${CONFIG.DATA_DIR}/stats.json ${tmp}/ 2>/dev/null || true`,
+    `cp ${CONFIG.DATA_DIR}/settings.json ${tmp}/ 2>/dev/null || true`,
+    `cd ${tmp} && git config user.email bot@bot.com && git config user.name bot && git add -A && git commit -m "data backup" || true && git push`,
+    `rm -rf ${tmp}`,
+  ].join(" && ");
+  exec(cmd, (err) => {
+    if (err) console.error("GitHub push error:", err.message);
+    else console.log("✅ Data pushed to GitHub");
+  });
 }
 
 function restoreDataFromGitHub() {
@@ -135,7 +134,6 @@ function restoreDataFromGitHub() {
 const WA_BASE = `https://graph.facebook.com/${CONFIG.WA_API_VERSION}/${CONFIG.WA_PHONE_ID}`;
 const WA_HEADERS = { Authorization: `Bearer ${CONFIG.WA_TOKEN}`, "Content-Type": "application/json" };
 
-// Send text message
 async function sendText(to, body) {
   try {
     await axios.post(`${WA_BASE}/messages`, {
@@ -149,7 +147,6 @@ async function sendText(to, body) {
   }
 }
 
-// Mark message as read (shows blue tick)
 async function markRead(messageId) {
   try {
     await axios.post(`${WA_BASE}/messages`, {
@@ -160,7 +157,6 @@ async function markRead(messageId) {
   } catch {}
 }
 
-// Upload media to WhatsApp servers and get media_id
 async function uploadMedia(buffer, filename, mimetype) {
   const form = new FormData();
   form.append("messaging_product", "whatsapp");
@@ -174,7 +170,6 @@ async function uploadMedia(buffer, filename, mimetype) {
   return res.data.id;
 }
 
-// Send document (PDF) with caption
 async function sendDocument(to, mediaId, filename, caption) {
   try {
     await axios.post(`${WA_BASE}/messages`, {
@@ -188,7 +183,6 @@ async function sendDocument(to, mediaId, filename, caption) {
   }
 }
 
-// Download media from WhatsApp by media_id
 async function downloadMedia(mediaId) {
   const meta = await axios.get(`https://graph.facebook.com/${CONFIG.WA_API_VERSION}/${mediaId}`, {
     headers: { Authorization: `Bearer ${CONFIG.WA_TOKEN}` }
@@ -202,22 +196,21 @@ async function downloadMedia(mediaId) {
 
 // ========== NID EXTRACTION & CARD GENERATION ==========
 function mapAPIData(d) {
-  // Keys must exactly match PHP $_POST variable names in nid-bn.php
   return {
     nid:        d.nationalId || d.nid || d.NID || d.national_id || "",
     pin:        d.pin || "",
-    pin_status: "disabled",                          // always show NID, not PIN
+    pin_status: "disabled",
     nameBangla: d.nameBangla || d.name_bn || "",
     nameEnglish:d.nameEnglish || d.name_en || "",
-    dob:        d.dateOfBirth || d.dob || "",        // $_POST['dob']
-    nameFather: d.fatherName || d.father_name || "", // $_POST['nameFather']
-    nameMother: d.motherName || d.mother_name || "", // $_POST['nameMother']
-    fulladdress:d.address || d.permanent_address || "", // $_POST['fulladdress']
-    birthPlace: d.birthPlace || d.birth_place || "", // $_POST['birthPlace']
-    bloodGroup: d.bloodGroup || d.blood_group || "", // $_POST['bloodGroup']
-    issueDate:  d.dateOfToday || "",                 // $_POST['issueDate'] (প্রদানের তারিখ)
-    imageUrl12: d.userIMG || d.imageUrl12 || "",     // user photo URL
-    imageUrl22: d.signIMG || d.imageUrl22 || "",     // signature URL
+    dob:        d.dateOfBirth || d.dob || "",
+    nameFather: d.fatherName || d.father_name || "",
+    nameMother: d.motherName || d.mother_name || "",
+    fulladdress:d.address || d.permanent_address || "",
+    birthPlace: d.birthPlace || d.birth_place || "",
+    bloodGroup: d.bloodGroup || d.blood_group || "",
+    issueDate:  d.dateOfToday || "",
+    imageUrl12: d.userIMG || d.imageUrl12 || "",
+    imageUrl22: d.signIMG || d.imageUrl22 || "",
   };
 }
 
@@ -230,7 +223,6 @@ async function extractNIDFromPDF(buffer) {
       maxContentLength: Infinity, maxBodyLength: Infinity, timeout: 60000,
     });
     console.log("📦 FULL API Response:", JSON.stringify(res.data, null, 2));
-    // API wraps data inside { status: "success", data: { ... } }
     const raw = (res.data?.data) ? res.data.data : res.data;
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
     return mapAPIData(parsed);
@@ -240,18 +232,52 @@ async function extractNIDFromPDF(buffer) {
   }
 }
 
-// API generates HTML with relative paths like "assets/css/nid_css.css"
-// Inject <base> tag so browser resolves them against the PHP server
-const PHP_BASE = "https://auto.onlinebd.top/bot/";
-
+// ========== PATH FIX ==========
 function fixRelativePaths(html) {
-  // /fonts/ absolute path fix করো
-  html = html.replace(/url\(\/fonts\//g, 'url(https://auto.onlinebd.top/fonts/');
-  
-  if (html.includes('<head>')) {
-    return html.replace('<head>', `<head><base href="${PHP_BASE}">`);
+  const BASE = "https://auto.onlinebd.top/bot";
+  const patterns = [
+    [/(src\s*=\s*["'])(assets\/)/gi,   `$1${BASE}/assets/`],
+    [/(href\s*=\s*["'])(assets\/)/gi,  `$1${BASE}/assets/`],
+    [/(src\s*=\s*["'])(photo\/)/gi,    `$1${BASE}/photo/`],
+    [/(src\s*=\s*)(assets\/)/gi,       `$1${BASE}/assets/`],
+    [/(href\s*=\s*)(assets\/)/gi,      `$1${BASE}/assets/`],
+    [/(src\s*=\s*)(photo\/)/gi,        `$1${BASE}/photo/`],
+    [/(url\s*\(\s*["']?)(assets\/)/gi, `$1${BASE}/assets/`],
+    [/(url\s*\(\s*["']?)(photo\/)/gi,  `$1${BASE}/photo/`],
+    // /fonts/ absolute path fix
+    [/(url\s*\(\s*["']?)(\/fonts\/)/gi, `$1https://auto.onlinebd.top/fonts/`],
+  ];
+  for (const [r, rep] of patterns) html = html.replace(r, rep);
+  // double path fix
+  const doubled = new RegExp(BASE.replace(/\./g, '\\.') + '/' + BASE.replace(/\./g, '\\.').replace('https://', ''), 'g');
+  html = html.replace(doubled, BASE);
+  return html;
+}
+
+// ========== FONT EMBED ==========
+async function embedFontsInHTML(html) {
+  const fonts = [
+    { url: "https://auto.onlinebd.top/fonts/Bangla.ttf", family: "Bangla", weight: "normal" },
+    { url: "https://auto.onlinebd.top/fonts/Arial.ttf",  family: "Arial",  weight: "normal" },
+  ];
+  let fontCSS = "";
+  for (const font of fonts) {
+    try {
+      const res = await axios.get(font.url, { responseType: "arraybuffer", timeout: 15000 });
+      const b64 = Buffer.from(res.data).toString("base64");
+      fontCSS += `\n@font-face{font-family:'${font.family}';src:url('data:font/truetype;base64,${b64}') format('truetype');font-weight:${font.weight};font-style:normal;}`;
+      console.log(`✅ Font embedded: ${font.family} — ${Math.round(res.data.byteLength / 1024)}KB`);
+    } catch (e) {
+      console.log(`⚠️ Font skip: ${font.url} — ${e.message}`);
+    }
   }
-  return `<base href="${PHP_BASE}">` + html;
+  const overrideCSS = `${fontCSS}\n*{font-family:Bangla,Arial,sans-serif!important;}.bn{font-family:Bangla,sans-serif!important;}.sans{font-family:Arial,sans-serif!important;}`;
+  if (html.includes("</head>")) {
+    html = html.replace("</head>", `<style id="embedded-fonts">${overrideCSS}</style>\n</head>`);
+  } else {
+    html = `<style id="embedded-fonts">${overrideCSS}</style>\n` + html;
+  }
+  return html;
 }
 
 async function fetchHTMLFromData(data) {
@@ -267,17 +293,25 @@ async function fetchHTMLFromData(data) {
 async function buildAndSaveHTML(data) {
   const html = await fetchHTMLFromData(data);
   const filename = `nid_${data.nid || Date.now()}_${Date.now()}.html`;
-  fs.writeFileSync(path.join(CONFIG.STORAGE_DIR, filename), html);
-  return `${CONFIG.BASE_URL}/storage/${filename}`;
-}
+  const filepath = path.join(CONFIG.STORAGE_DIR, filename);
+  fs.writeFileSync(filepath, html);
 
-async function embedFontsInHTML(html) {
-  return html;
+  // ✅ 10 মিনিট পর file delete
+  setTimeout(() => {
+    fs.unlink(filepath, (err) => {
+      if (!err) console.log(`🗑️ Deleted: ${filename}`);
+    });
+  }, 10 * 60 * 1000);
+
+  return `${CONFIG.BASE_URL}/storage/${filename}`;
 }
 
 async function generatePDFFromMapped(data) {
   let html = await fetchHTMLFromData(data);
+  // ✅ Font embed করা হচ্ছে PDF এর জন্য
   html = await embedFontsInHTML(html);
+  console.log(`✅ Fonts embedded, HTML: ${html.length} chars`);
+
   const res = await axios.post(`${CONFIG.PDF_API_URL}/pdf`, {
     secret: CONFIG.PDF_API_SECRET,
     html
@@ -290,7 +324,8 @@ async function generatePDFFromMapped(data) {
 async function handleIncoming(msg, contact) {
   const from = msg.from;
   const msgId = msg.id;
-  await markRead(msgId);
+
+  markRead(msgId);
 
   if (msg.type === "text") {
     const text = msg.text.body.trim().toLowerCase();
@@ -330,6 +365,7 @@ async function handleIncoming(msg, contact) {
 
       if (price > 0) deductBalance(from);
 
+      // HTML + PDF parallel
       const [htmlUrl, pdfBuffer] = await Promise.all([
         buildAndSaveHTML(data),
         generatePDFFromMapped(data),
@@ -338,8 +374,8 @@ async function handleIncoming(msg, contact) {
       recordStat(from);
       pushDataToGitHub();
 
-      const filename = `nid-${data.nid}.pdf`;
-      const caption = `✅ আপনার NID Card তৈরি হয়েছে!\n\n👤 নাম: ${data.nameBangla || data.nameEnglish}\n🆔 NID: ${data.nid}\n🎂 DOB: ${data.dob}\n${price > 0 ? `💰 Remaining Balance: ${getUserBalance(from)} টাকা\n` : ""}🖨️ Print করতে: ${htmlUrl}`;
+      const filename = `NID_${data.nid}.pdf`;
+      const caption = `✅ আপনার NID Card তৈরি হয়েছে!\n\n👤 নাম: ${data.nameBangla || data.nameEnglish}\n🆔 NID: ${data.nid}\n🎂 DOB: ${data.dob}\n${price > 0 ? `💰 Remaining Balance: ${getUserBalance(from)} টাকা\n` : ""}🖨️ Print করতে (১০ মিনিট): ${htmlUrl}`;
 
       const mediaId = await uploadMedia(pdfBuffer, filename, "application/pdf");
       await sendDocument(from, mediaId, filename, caption);
@@ -390,7 +426,6 @@ app.get("/privacy", (req, res) => {
 });
 
 app.use("/storage", express.static(CONFIG.STORAGE_DIR));
-
 app.get("/", (req, res) => res.send("✅ NID Bot (Cloud API) is running"));
 
 // ========== ADMIN PANEL ==========
@@ -548,8 +583,27 @@ app.post("/admin/backup", adminAuth, (req, res) => {
   res.redirect("/admin");
 });
 
+// ========== STARTUP CLEANUP ==========
+function cleanupOldFiles() {
+  try {
+    const files = fs.readdirSync(CONFIG.STORAGE_DIR);
+    const tenMin = 10 * 60 * 1000;
+    files.forEach(f => {
+      if (!f.endsWith(".html")) return;
+      const fp = path.join(CONFIG.STORAGE_DIR, f);
+      const age = Date.now() - fs.statSync(fp).mtimeMs;
+      if (age > tenMin) {
+        fs.unlinkSync(fp);
+        console.log(`🗑️ Cleaned: ${f}`);
+      }
+    });
+  } catch (e) {}
+}
+
 // ========== START ==========
 restoreDataFromGitHub();
+cleanupOldFiles();
+
 app.listen(CONFIG.PORT, () => {
   console.log(`🚀 NID Bot (Cloud API) running on port ${CONFIG.PORT}`);
   console.log(`📡 Webhook URL: ${CONFIG.BASE_URL}/webhook`);
