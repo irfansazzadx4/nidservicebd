@@ -388,7 +388,7 @@ async function handleIncoming(msg, contact) {
       recordStat(from);
       backupData(); // ✅ instant MongoDB backup
 
-      const filename = `NID_${data.nid}.pdf`;
+      const filename = `nid-${data.nid}.pdf`;
       const caption  = `✅ আপনার NID Card তৈরি হয়েছে!\n\n👤 নাম: ${data.nameBangla || data.nameEnglish}\n🆔 NID: ${data.nid}\n🎂 DOB: ${data.dob}\n${price > 0 ? `💰 Remaining Balance: ${getUserBalance(from)} টাকা\n` : ""}🖨️ Print করতে (১০ মিনিট): ${htmlUrl}`;
 
       const mediaId = await uploadMedia(pdfBuffer, filename, "application/pdf");
