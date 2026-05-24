@@ -1,13 +1,15 @@
 /**
- * NID Service Bot - WhatsApp Cloud API Version
- * Fast MongoDB backup, recharge/deduct, font embed, 10min file delete
+ * NID Service Bot - WhatsApp Cloud API
+ * ✅ Caption আলাদা text message, PDF আলাদা document
+ * ✅ Arial + Bangla font via pdf-server
+ * ✅ Pro Admin Panel UI
  */
 
 const express = require("express");
-const axios = require("axios");
-const fs = require("fs");
-const path = require("path");
-const crypto = require("crypto");
+const axios   = require("axios");
+const fs      = require("fs");
+const path    = require("path");
+const crypto  = require("crypto");
 const FormData = require("form-data");
 
 // ========== CONFIG ==========
@@ -15,36 +17,33 @@ const CONFIG = {
   PORT: process.env.PORT || 3000,
   ADMIN_PASS: process.env.ADMIN_PASS || "admin123",
 
-  WA_TOKEN: process.env.WHATSAPP_TOKEN,
-  WA_PHONE_ID: process.env.WHATSAPP_PHONE_ID,
+  WA_TOKEN:        process.env.WHATSAPP_TOKEN,
+  WA_PHONE_ID:     process.env.WHATSAPP_PHONE_ID,
   WA_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || "myVerifyToken123",
-  WA_API_VERSION: "v21.0",
+  WA_API_VERSION:  "v21.0",
 
   API_EXTRACT_URL: "https://auto.onlinebd.top/Signtonid_api_one.php",
-  API_GENERATE_URL: "https://auto.onlinebd.top/bot/nid-bn.php",
-  PDF_API_URL: process.env.PDF_API_URL,
-  PDF_API_SECRET: process.env.PDF_API_SECRET,
+  API_GENERATE_URL:"https://auto.onlinebd.top/bot/nid-bn.php",
+  PDF_API_URL:     process.env.PDF_API_URL,
+  PDF_API_SECRET:  process.env.PDF_API_SECRET,
 
-  BASE_URL: process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL || "https://nidservicebd.onrender.com",
+  BASE_URL:    process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL || "https://nidservicebd.onrender.com",
   STORAGE_DIR: path.join(__dirname, "storage"),
-  DATA_DIR: path.join(__dirname, "data"),
+  DATA_DIR:    path.join(__dirname, "data"),
 
-  // MongoDB Atlas (fast backup)
-  MONGO_URI: process.env.MONGO_URI, // mongodb+srv://user:pass@cluster.mongodb.net/nidbot
+  MONGO_URI: process.env.MONGO_URI,
 };
 
 if (!fs.existsSync(CONFIG.STORAGE_DIR)) fs.mkdirSync(CONFIG.STORAGE_DIR, { recursive: true });
-if (!fs.existsSync(CONFIG.DATA_DIR)) fs.mkdirSync(CONFIG.DATA_DIR, { recursive: true });
+if (!fs.existsSync(CONFIG.DATA_DIR))    fs.mkdirSync(CONFIG.DATA_DIR,    { recursive: true });
 
 const USERS_FILE    = path.join(CONFIG.DATA_DIR, "users.json");
 const STATS_FILE    = path.join(CONFIG.DATA_DIR, "stats.json");
 const SETTINGS_FILE = path.join(CONFIG.DATA_DIR, "settings.json");
 
 // ========== HELPERS ==========
-const loadJSON = (f, def) => {
-  try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return def; }
-};
-const saveJSON = (f, d) => fs.writeFileSync(f, JSON.stringify(d, null, 2));
+const loadJSON = (f, def) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return def; } };
+const saveJSON = (f, d)   => fs.writeFileSync(f, JSON.stringify(d, null, 2));
 
 const getUsers    = () => loadJSON(USERS_FILE,    []);
 const saveUsers   = (u) => saveJSON(USERS_FILE,   u);
@@ -75,7 +74,7 @@ function getUserBalance(number) {
 function deductBalance(number) {
   const users = getUsers();
   const price = getSettings().cardPrice || 0;
-  const idx = users.findIndex(x => normalizeNumber(x.number) === normalizeNumber(number));
+  const idx   = users.findIndex(x => normalizeNumber(x.number) === normalizeNumber(number));
   if (idx === -1) return false;
   if ((users[idx].balance || 0) < price) return false;
   users[idx].balance = (users[idx].balance || 0) - price;
@@ -85,18 +84,14 @@ function deductBalance(number) {
 
 function recordStat(number) {
   const stats = getStats();
-  const key = normalizeNumber(number);
+  const key   = normalizeNumber(number);
   if (!stats[key]) stats[key] = { count: 0, lastUsed: null };
   stats[key].count++;
   stats[key].lastUsed = new Date().toISOString();
   saveStats(stats);
 }
 
-// ========== MONGODB BACKUP (fast, instant) ==========
-// MongoDB REST API (Data API) ব্যবহার করা হচ্ছে — npm package দরকার নেই
-// Render এ MONGO_URI env variable সেট করুন
-// Format: mongodb+srv://user:pass@cluster.mongodb.net/nidbot
-
+// ========== MONGODB ==========
 let mongoClient = null;
 
 async function getMongoClient() {
@@ -118,27 +113,20 @@ async function saveToMongo(collection, key, data) {
   try {
     const client = await getMongoClient();
     if (!client) return;
-    const db = client.db("nidbot");
-    await db.collection(collection).replaceOne({ _id: key }, { _id: key, data }, { upsert: true });
-  } catch (e) {
-    console.error("MongoDB save error:", e.message);
-  }
+    await client.db("nidbot").collection(collection)
+      .replaceOne({ _id: key }, { _id: key, data }, { upsert: true });
+  } catch (e) { console.error("MongoDB save error:", e.message); }
 }
 
 async function loadFromMongo(collection, key) {
   try {
     const client = await getMongoClient();
     if (!client) return null;
-    const db = client.db("nidbot");
-    const doc = await db.collection(collection).findOne({ _id: key });
+    const doc = await client.db("nidbot").collection(collection).findOne({ _id: key });
     return doc ? doc.data : null;
-  } catch (e) {
-    console.error("MongoDB load error:", e.message);
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
-// ✅ Fast backup — সাথে সাথে MongoDB এ save হয়
 async function backupData() {
   try {
     await Promise.all([
@@ -147,12 +135,9 @@ async function backupData() {
       saveToMongo("backups", "settings", getSettings()),
     ]);
     console.log("✅ MongoDB backup done");
-  } catch (e) {
-    console.error("Backup error:", e.message);
-  }
+  } catch (e) { console.error("Backup error:", e.message); }
 }
 
-// ✅ Restore from MongoDB on startup
 async function restoreData() {
   try {
     const [users, stats, settings] = await Promise.all([
@@ -164,29 +149,27 @@ async function restoreData() {
     if (stats    && !fs.existsSync(STATS_FILE))    saveStats(stats);
     if (settings && !fs.existsSync(SETTINGS_FILE)) saveSettings(settings);
     if (users || stats || settings) console.log("✅ Data restored from MongoDB");
-    else console.log("ℹ️ No MongoDB data found — starting fresh");
-  } catch (e) {
-    console.error("Restore error:", e.message);
-  }
+    else console.log("ℹ️ No MongoDB data — starting fresh");
+  } catch (e) { console.error("Restore error:", e.message); }
 }
 
-// ========== WHATSAPP CLOUD API ==========
-const WA_BASE    = `https://graph.facebook.com/${CONFIG.WA_API_VERSION}/${CONFIG.WA_PHONE_ID}`;
-const WA_HEADERS = { Authorization: `Bearer ${CONFIG.WA_TOKEN}`, "Content-Type": "application/json" };
+// ========== WHATSAPP API ==========
+const WA_BASE    = () => `https://graph.facebook.com/${CONFIG.WA_API_VERSION}/${CONFIG.WA_PHONE_ID}`;
+const WA_HEADERS = () => ({ Authorization: `Bearer ${CONFIG.WA_TOKEN}`, "Content-Type": "application/json" });
 
 async function sendText(to, body) {
   try {
-    await axios.post(`${WA_BASE}/messages`, {
+    await axios.post(`${WA_BASE()}/messages`, {
       messaging_product: "whatsapp", to, type: "text", text: { body }
-    }, { headers: WA_HEADERS });
+    }, { headers: WA_HEADERS() });
   } catch (e) { console.error("sendText error:", e.response?.data || e.message); }
 }
 
 async function markRead(messageId) {
   try {
-    await axios.post(`${WA_BASE}/messages`, {
+    await axios.post(`${WA_BASE()}/messages`, {
       messaging_product: "whatsapp", status: "read", message_id: messageId
-    }, { headers: WA_HEADERS });
+    }, { headers: WA_HEADERS() });
   } catch {}
 }
 
@@ -195,29 +178,31 @@ async function uploadMedia(buffer, filename, mimetype) {
   form.append("messaging_product", "whatsapp");
   form.append("file", buffer, { filename, contentType: mimetype });
   form.append("type", mimetype);
-  const res = await axios.post(`${WA_BASE}/media`, form, {
+  const res = await axios.post(`${WA_BASE()}/media`, form, {
     headers: { ...form.getHeaders(), Authorization: `Bearer ${CONFIG.WA_TOKEN}` },
     maxContentLength: Infinity, maxBodyLength: Infinity,
   });
   return res.data.id;
 }
 
-async function sendDocument(to, mediaId, filename, caption) {
+// ✅ PDF শুধু document হিসেবে পাঠাও, caption ছাড়া
+async function sendDocument(to, mediaId, filename) {
   try {
-    await axios.post(`${WA_BASE}/messages`, {
+    await axios.post(`${WA_BASE()}/messages`, {
       messaging_product: "whatsapp", to, type: "document",
-      document: { id: mediaId, filename, caption }
-    }, { headers: WA_HEADERS });
+      document: { id: mediaId, filename }
+    }, { headers: WA_HEADERS() });
   } catch (e) { console.error("sendDocument error:", e.response?.data || e.message); }
 }
 
 async function downloadMedia(mediaId) {
-  const meta = await axios.get(`https://graph.facebook.com/${CONFIG.WA_API_VERSION}/${mediaId}`, {
-    headers: { Authorization: `Bearer ${CONFIG.WA_TOKEN}` }
-  });
+  const meta = await axios.get(
+    `https://graph.facebook.com/${CONFIG.WA_API_VERSION}/${mediaId}`,
+    { headers: { Authorization: `Bearer ${CONFIG.WA_TOKEN}` } }
+  );
   const fileRes = await axios.get(meta.data.url, {
     headers: { Authorization: `Bearer ${CONFIG.WA_TOKEN}` },
-    responseType: "arraybuffer"
+    responseType: "arraybuffer",
   });
   return { buffer: Buffer.from(fileRes.data), mimetype: meta.data.mime_type };
 }
@@ -225,20 +210,20 @@ async function downloadMedia(mediaId) {
 // ========== NID EXTRACTION ==========
 function mapAPIData(d) {
   return {
-    nid:        d.nationalId || d.nid || d.NID || d.national_id || "",
-    pin:        d.pin || "",
-    pin_status: "disabled",
-    nameBangla: d.nameBangla || d.name_bn || "",
-    nameEnglish:d.nameEnglish || d.name_en || "",
-    dob:        d.dateOfBirth || d.dob || "",
-    nameFather: d.fatherName || d.father_name || "",
-    nameMother: d.motherName || d.mother_name || "",
-    fulladdress:d.address || d.permanent_address || "",
-    birthPlace: d.birthPlace || d.birth_place || "",
-    bloodGroup: d.bloodGroup || d.blood_group || "",
-    issueDate:  d.dateOfToday || "",
-    imageUrl12: d.userIMG || d.imageUrl12 || "",
-    imageUrl22: d.signIMG || d.imageUrl22 || "",
+    nid:         d.nationalId || d.nid || d.NID || d.national_id || "",
+    pin:         d.pin || "",
+    pin_status:  "disabled",
+    nameBangla:  d.nameBangla || d.name_bn || "",
+    nameEnglish: d.nameEnglish || d.name_en || "",
+    dob:         d.dateOfBirth || d.dob || "",
+    nameFather:  d.fatherName || d.father_name || "",
+    nameMother:  d.motherName || d.mother_name || "",
+    fulladdress: d.address || d.permanent_address || "",
+    birthPlace:  d.birthPlace || d.birth_place || "",
+    bloodGroup:  d.bloodGroup || d.blood_group || "",
+    issueDate:   d.dateOfToday || "",
+    imageUrl12:  d.userIMG || d.imageUrl12 || "",
+    imageUrl22:  d.signIMG || d.imageUrl22 || "",
   };
 }
 
@@ -250,12 +235,12 @@ async function extractNIDFromPDF(buffer) {
       headers: form.getHeaders(),
       maxContentLength: Infinity, maxBodyLength: Infinity, timeout: 60000,
     });
-    console.log("📦 FULL API Response:", JSON.stringify(res.data, null, 2));
-    const raw = (res.data?.data) ? res.data.data : res.data;
+    console.log("📦 API Response:", JSON.stringify(res.data).slice(0, 200));
+    const raw    = res.data?.data ? res.data.data : res.data;
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
     return mapAPIData(parsed);
   } catch (err) {
-    console.error("❌ Extract API failed:", err.response?.status, JSON.stringify(err.response?.data), err.message);
+    console.error("❌ Extract API failed:", err.response?.status, err.message);
     throw new Error("Extract API: " + (err.response?.data?.message || err.message));
   }
 }
@@ -264,45 +249,14 @@ async function extractNIDFromPDF(buffer) {
 function fixRelativePaths(html) {
   const BASE = "https://auto.onlinebd.top/bot";
   const patterns = [
-    [/(src\s*=\s*["'])(assets\/)/gi,    `$1${BASE}/assets/`],
-    [/(href\s*=\s*["'])(assets\/)/gi,   `$1${BASE}/assets/`],
-    [/(src\s*=\s*["'])(photo\/)/gi,     `$1${BASE}/photo/`],
-    [/(src\s*=\s*)(assets\/)/gi,        `$1${BASE}/assets/`],
-    [/(href\s*=\s*)(assets\/)/gi,       `$1${BASE}/assets/`],
-    [/(src\s*=\s*)(photo\/)/gi,         `$1${BASE}/photo/`],
-    [/(url\s*\(\s*["']?)(assets\/)/gi,  `$1${BASE}/assets/`],
-    [/(url\s*\(\s*["']?)(photo\/)/gi,   `$1${BASE}/photo/`],
-    [/(url\s*\(\s*["']?)(\/fonts\/)/gi, `$1https://auto.onlinebd.top/fonts/`],
+    [/(src\s*=\s*["'])(assets\/)/gi,   `$1${BASE}/assets/`],
+    [/(href\s*=\s*["'])(assets\/)/gi,  `$1${BASE}/assets/`],
+    [/(src\s*=\s*["'])(photo\/)/gi,    `$1${BASE}/photo/`],
+    [/(url\s*\(\s*["']?)(assets\/)/gi, `$1${BASE}/assets/`],
+    [/(url\s*\(\s*["']?)(photo\/)/gi,  `$1${BASE}/photo/`],
+    [/(url\s*\(\s*["']?)(\/fonts\/)/gi,`$1https://auto.onlinebd.top/fonts/`],
   ];
   for (const [r, rep] of patterns) html = html.replace(r, rep);
-  const doubled = new RegExp(BASE.replace(/\./g, '\\.') + '/' + BASE.replace(/\./g, '\\.').replace('https://', ''), 'g');
-  html = html.replace(doubled, BASE);
-  return html;
-}
-
-// ========== FONT EMBED ==========
-async function embedFontsInHTML(html) {
-  const fonts = [
-    { url: "https://auto.onlinebd.top/fonts/Bangla.ttf", family: "Bangla", weight: "normal" },
-    { url: "https://auto.onlinebd.top/fonts/Arial.ttf",  family: "Arial",  weight: "normal" },
-  ];
-  let fontCSS = "";
-  for (const font of fonts) {
-    try {
-      const res = await axios.get(font.url, { responseType: "arraybuffer", timeout: 15000 });
-      const b64 = Buffer.from(res.data).toString("base64");
-      fontCSS += `\n@font-face{font-family:'${font.family}';src:url('data:font/truetype;base64,${b64}') format('truetype');font-weight:${font.weight};font-style:normal;}`;
-      console.log(`✅ Font embedded: ${font.family} — ${Math.round(res.data.byteLength / 1024)}KB`);
-    } catch (e) {
-      console.log(`⚠️ Font skip: ${font.url} — ${e.message}`);
-    }
-  }
-  const overrideCSS = `${fontCSS}\n*{font-family:Bangla,Arial,sans-serif!important;}.bn{font-family:Bangla,sans-serif!important;}.sans{font-family:Arial,sans-serif!important;}`;
-  if (html.includes("</head>")) {
-    html = html.replace("</head>", `<style id="embedded-fonts">${overrideCSS}</style>\n</head>`);
-  } else {
-    html = `<style id="embedded-fonts">${overrideCSS}</style>\n` + html;
-  }
   return html;
 }
 
@@ -317,27 +271,20 @@ async function fetchHTMLFromData(data) {
 }
 
 async function buildAndSaveHTML(data) {
-  const html = await fetchHTMLFromData(data);
+  const html     = await fetchHTMLFromData(data);
   const filename = `nid_${data.nid || Date.now()}_${Date.now()}.html`;
   const filepath = path.join(CONFIG.STORAGE_DIR, filename);
   fs.writeFileSync(filepath, html);
-
-  // ✅ 10 মিনিট পর file delete
-  setTimeout(() => {
-    fs.unlink(filepath, (err) => {
-      if (!err) console.log(`🗑️ Deleted: ${filename}`);
-    });
-  }, 10 * 60 * 1000);
-
+  setTimeout(() => { fs.unlink(filepath, () => {}); }, 10 * 60 * 1000);
   return `${CONFIG.BASE_URL}/storage/${filename}`;
 }
 
-async function generatePDFFromMapped(data) {
-  let html = await fetchHTMLFromData(data);
-  html = await embedFontsInHTML(html);
-  console.log(`✅ Fonts embedded, HTML: ${html.length} chars`);
+async function generatePDF(data) {
+  const html = await fetchHTMLFromData(data);
+  // Font embed pdf-server এ হয়, এখানে plain HTML পাঠাও
   const res = await axios.post(`${CONFIG.PDF_API_URL}/pdf`, {
-    secret: CONFIG.PDF_API_SECRET, html
+    secret: CONFIG.PDF_API_SECRET,
+    html,
   }, { timeout: 90000 });
   const base64 = res.data.pdf || res.data.base64 || res.data;
   return Buffer.from(base64, "base64");
@@ -351,24 +298,39 @@ async function handleIncoming(msg, contact) {
 
   if (msg.type === "text") {
     const text = msg.text.body.trim().toLowerCase();
-    if (text === ".ping" || text === "ping") return sendText(from, "🟢 Pong! Bot সচল আছে।");
+
+    if (text === ".ping" || text === "ping") {
+      return sendText(from, "🟢 Pong! Bot সচল আছে।");
+    }
+
     if (text === ".status" || text === "status") {
-      if (!isAllowed(from)) return sendText(from, "❌ আপনি authorized নন। Admin এর সাথে যোগাযোগ করুন।");
+      if (!isAllowed(from)) return sendText(from, "❌ আপনি authorized নন।");
       const bal   = getUserBalance(from);
       const price = getSettings().cardPrice || 0;
-      return sendText(from, `✅ আপনি authorized।\n💰 Balance: ${bal} টাকা\n💳 Card Price: ${price} টাকা`);
+      return sendText(from,
+        `✅ আপনি authorized।\n💰 Balance: ${bal} টাকা\n💳 Card Price: ${price} টাকা`
+      );
     }
-    return sendText(from, "📄 NID Card বানাতে আপনার NID PDF টা এই chat এ পাঠান।\n\nCommands:\n.ping - bot check\n.status - balance check");
+
+    return sendText(from,
+      "📄 NID Card বানাতে আপনার NID PDF টা এই chat এ পাঠান।\n\nCommands:\n.ping - bot check\n.status - balance check"
+    );
   }
 
   if (msg.type === "document") {
     const doc = msg.document;
-    if (!doc.mime_type?.includes("pdf")) return sendText(from, "❌ শুধু PDF file পাঠাতে হবে।");
-    if (!isAllowed(from)) return sendText(from, "❌ আপনি authorized নন। Admin এর সাথে যোগাযোগ করুন।");
+    if (!doc.mime_type?.includes("pdf")) {
+      return sendText(from, "❌ শুধু PDF file পাঠাতে হবে।");
+    }
+    if (!isAllowed(from)) {
+      return sendText(from, "❌ আপনি authorized নন। Admin এর সাথে যোগাযোগ করুন।");
+    }
 
     const price = getSettings().cardPrice || 0;
     if (price > 0 && getUserBalance(from) < price) {
-      return sendText(from, `❌ Balance কম! কমপক্ষে ${price} টাকা থাকতে হবে।\nCurrent balance: ${getUserBalance(from)} টাকা`);
+      return sendText(from,
+        `❌ Balance কম! কমপক্ষে ${price} টাকা থাকতে হবে।\nCurrent balance: ${getUserBalance(from)} টাকা`
+      );
     }
 
     await sendText(from, "⏳ আপনার NID PDF process হচ্ছে... একটু wait করুন।");
@@ -382,17 +344,31 @@ async function handleIncoming(msg, contact) {
 
       const [htmlUrl, pdfBuffer] = await Promise.all([
         buildAndSaveHTML(data),
-        generatePDFFromMapped(data),
+        generatePDF(data),
       ]);
 
       recordStat(from);
-      backupData(); // ✅ instant MongoDB backup
+      backupData();
 
-      const filename = `nid-${data.nid}.pdf`;
-      const caption  = `✅ আপনার NID Card তৈরি হয়েছে!\n\n👤 নাম: ${data.nameBangla || data.nameEnglish}\n🆔 NID: ${data.nid}\n🎂 DOB: ${data.dob}\n${price > 0 ? `💰 Remaining Balance: ${getUserBalance(from)} টাকা\n` : ""}🖨️ Print করতে (১০ মিনিট): ${htmlUrl}`;
+      // ✅ Caption আলাদা text message
+      const captionLines = [
+        `✅ আপনার NID Card তৈরি হয়েছে!`,
+        ``,
+        `👤 নাম: ${data.nameBangla || data.nameEnglish}`,
+        `🆔 NID: ${data.nid}`,
+        `🎂 DOB: ${data.dob}`,
+        price > 0 ? `💰 Remaining Balance: ${getUserBalance(from)} টাকা` : "",
+        `🖨️ Print করতে (১০ মিনিট): ${htmlUrl}`,
+      ].filter(Boolean).join("\n");
 
-      const mediaId = await uploadMedia(pdfBuffer, filename, "application/pdf");
-      await sendDocument(from, mediaId, filename, caption);
+      await sendText(from, captionLines);
+
+      // ✅ PDF আলাদা document (caption ছাড়া)
+      const safeName = (data.nameEnglish || data.nameBangla || "NID").replace(/[/\\?%*:|"<>]/g, "").trim();
+      const filename = `${data.nid} - ${safeName}.pdf`;
+      const mediaId  = await uploadMedia(pdfBuffer, filename, "application/pdf");
+      await sendDocument(from, mediaId, filename);
+
     } catch (err) {
       console.error("Process error:", err.message);
       await sendText(from, `❌ Error: ${err.message}\nআবার চেষ্টা করুন বা admin কে জানান।`);
@@ -400,15 +376,13 @@ async function handleIncoming(msg, contact) {
   }
 }
 
-// ========== EXPRESS SERVER ==========
+// ========== EXPRESS ==========
 const app = express();
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 app.get("/webhook", (req, res) => {
-  const mode      = req.query["hub.mode"];
-  const token     = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
+  const { "hub.mode": mode, "hub.verify_token": token, "hub.challenge": challenge } = req.query;
   if (mode === "subscribe" && token === CONFIG.WA_VERIFY_TOKEN) {
     console.log("✅ Webhook verified");
     return res.status(200).send(challenge);
@@ -423,39 +397,109 @@ app.post("/webhook", async (req, res) => {
     const change   = entry?.changes?.[0]?.value;
     const messages = change?.messages || [];
     const contacts = change?.contacts || [];
-    for (const msg of messages) {
-      await handleIncoming(msg, contacts[0]);
-    }
+    for (const msg of messages) await handleIncoming(msg, contacts[0]);
   } catch (e) { console.error("Webhook error:", e.message); }
 });
 
-app.get("/privacy", (req, res) => {
-  res.send(`<html><body style="font-family:sans-serif;max-width:700px;margin:40px auto;padding:20px;">
-    <h1>Privacy Policy</h1>
-    <p>NID Service Bot collects only the NID PDF you send. We process it to generate a card and do not share your data with any third party except the NID extraction service required for processing.</p>
-    <p>Data is stored temporarily and deleted automatically.</p>
-  </body></html>`);
-});
-
+app.get("/privacy", (_, res) => res.send(`<html><body style="font-family:sans-serif;max-width:700px;margin:40px auto;padding:20px;"><h1>Privacy Policy</h1><p>NID Service Bot processes NID PDFs temporarily and does not store personal data permanently.</p></body></html>`));
 app.use("/storage", express.static(CONFIG.STORAGE_DIR));
-app.get("/", (req, res) => res.send("✅ NID Bot (Cloud API) is running"));
+app.get("/", (_, res) => res.send("✅ NID Bot is running"));
 
 // ========== ADMIN PANEL ==========
 const adminSessions = new Set();
 
 function adminAuth(req, res, next) {
-  const sess = (req.headers.cookie || "").split(";").map(s => s.trim()).find(s => s.startsWith("admin_sess="))?.split("=")[1];
+  const sess = (req.headers.cookie || "").split(";").map(s => s.trim())
+    .find(s => s.startsWith("admin_sess="))?.split("=")[1];
   if (sess && adminSessions.has(sess)) return next();
   res.redirect("/admin/login");
 }
 
-app.get("/admin/login", (req, res) => {
-  res.send(`<html><body style="font-family:sans-serif;max-width:400px;margin:80px auto;padding:30px;background:#f5f5f5;border-radius:8px;">
-    <h2>🔐 Admin Login</h2>
-    <form method="POST" action="/admin/login">
-      <input name="password" type="password" placeholder="Password" style="width:100%;padding:10px;margin:10px 0;" required/>
-      <button type="submit" style="width:100%;padding:10px;background:#0078d4;color:#fff;border:0;border-radius:4px;cursor:pointer;">Login</button>
-    </form>
+const ADMIN_CSS = `
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --primary: #4f46e5;
+    --primary-dark: #4338ca;
+    --success: #10b981;
+    --danger: #ef4444;
+    --warning: #f59e0b;
+    --bg: #f1f5f9;
+    --card: #ffffff;
+    --text: #1e293b;
+    --muted: #64748b;
+    --border: #e2e8f0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .topbar { background: var(--primary); color: #fff; padding: 0 24px; height: 56px; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 2px 8px rgba(79,70,229,.3); position: sticky; top: 0; z-index: 100; }
+  .topbar h1 { font-size: 18px; font-weight: 700; letter-spacing: -.3px; }
+  .topbar a { color: rgba(255,255,255,.8); text-decoration: none; font-size: 13px; padding: 6px 14px; border: 1px solid rgba(255,255,255,.3); border-radius: 6px; transition: all .2s; }
+  .topbar a:hover { background: rgba(255,255,255,.15); color: #fff; }
+  .wrap { max-width: 1300px; margin: 0 auto; padding: 24px 20px; }
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .stat-card { background: var(--card); border-radius: 12px; padding: 18px 20px; box-shadow: 0 1px 3px rgba(0,0,0,.07); border: 1px solid var(--border); }
+  .stat-card .label { font-size: 12px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .5px; }
+  .stat-card .value { font-size: 28px; font-weight: 700; margin-top: 4px; color: var(--primary); }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  @media(max-width:700px) { .grid2 { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border-radius: 12px; padding: 20px 24px; box-shadow: 0 1px 3px rgba(0,0,0,.07); border: 1px solid var(--border); margin-bottom: 16px; }
+  .card h3 { font-size: 14px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 14px; }
+  .form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input[type=text], input[type=password], input[type=number], select {
+    border: 1.5px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; color: var(--text);
+    background: #fff; outline: none; transition: border .2s;
+  }
+  input:focus, select:focus { border-color: var(--primary); }
+  input[placeholder] { min-width: 160px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border: 0; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .2s; }
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-primary:hover { background: var(--primary-dark); }
+  .btn-success { background: var(--success); color: #fff; }
+  .btn-success:hover { background: #059669; }
+  .btn-danger  { background: var(--danger);  color: #fff; }
+  .btn-danger:hover  { background: #dc2626; }
+  .btn-warning { background: var(--warning); color: #fff; }
+  .btn-warning:hover { background: #d97706; }
+  .btn-ghost { background: var(--border); color: var(--text); }
+  .btn-ghost:hover { background: #cbd5e1; }
+  .btn-teal { background: #0891b2; color: #fff; }
+  .btn-teal:hover { background: #0e7490; }
+  .section-title { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { background: #f8fafc; color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: .5px; padding: 10px 12px; text-align: left; border-bottom: 2px solid var(--border); }
+  tbody td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover { background: #f8fafc; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .badge-green  { background: #d1fae5; color: #065f46; }
+  .badge-red    { background: #fee2e2; color: #991b1b; }
+  .badge-blue   { background: #dbeafe; color: #1e40af; }
+  .badge-yellow { background: #fef3c7; color: #92400e; }
+  .action-row { display: flex; gap: 4px; flex-wrap: wrap; }
+  .bal-positive { color: var(--success); font-weight: 700; }
+  .bal-negative { color: var(--danger);  font-weight: 700; }
+  .mongo-ok  { background: #d1fae5; color: #065f46; padding: 6px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; }
+  .mongo-err { background: #fee2e2; color: #991b1b; padding: 6px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; }
+  .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); }
+  .login-box { background: var(--card); border-radius: 16px; padding: 40px; width: 100%; max-width: 380px; box-shadow: 0 4px 24px rgba(0,0,0,.1); }
+  .login-box h2 { font-size: 22px; font-weight: 700; margin-bottom: 24px; color: var(--text); }
+  .login-box input { width: 100%; margin-bottom: 12px; }
+  .login-box .btn { width: 100%; justify-content: center; padding: 10px; font-size: 15px; }
+</style>`;
+
+app.get("/admin/login", (_, res) => {
+  res.send(`<html><head>${ADMIN_CSS}</head><body>
+  <div class="login-wrap">
+    <div class="login-box">
+      <h2>🔐 NID Bot Admin</h2>
+      <form method="POST" action="/admin/login">
+        <input name="password" type="password" placeholder="Password" required/>
+        <button class="btn btn-primary">Login →</button>
+      </form>
+    </div>
+  </div>
   </body></html>`);
 });
 
@@ -466,12 +510,22 @@ app.post("/admin/login", (req, res) => {
     res.setHeader("Set-Cookie", `admin_sess=${tok}; HttpOnly; Path=/; Max-Age=86400`);
     return res.redirect("/admin");
   }
-  res.send("❌ Wrong password. <a href='/admin/login'>Try again</a>");
+  res.send(`<html><head>${ADMIN_CSS}</head><body>
+  <div class="login-wrap">
+    <div class="login-box">
+      <h2>🔐 NID Bot Admin</h2>
+      <p style="color:var(--danger);margin-bottom:12px;font-size:13px;">❌ Wrong password</p>
+      <form method="POST" action="/admin/login">
+        <input name="password" type="password" placeholder="Password" required/>
+        <button class="btn btn-primary">Login →</button>
+      </form>
+    </div>
+  </div></body></html>`);
 });
 
 app.get("/admin/logout", (req, res) => {
-  const cookie = (req.headers.cookie || "").split(";").map(s => s.trim()).find(s => s.startsWith("admin_sess="));
-  if (cookie) adminSessions.delete(cookie.split("=")[1]);
+  const c = (req.headers.cookie || "").split(";").map(s => s.trim()).find(s => s.startsWith("admin_sess="));
+  if (c) adminSessions.delete(c.split("=")[1]);
   res.setHeader("Set-Cookie", "admin_sess=; Max-Age=0; Path=/");
   res.redirect("/admin/login");
 });
@@ -480,78 +534,109 @@ app.get("/admin", adminAuth, (req, res) => {
   const users    = getUsers();
   const stats    = getStats();
   const settings = getSettings();
+
+  const totalCards   = Object.values(stats).reduce((s, x) => s + (x.count || 0), 0);
+  const totalBalance = users.reduce((s, u) => s + (u.balance || 0), 0);
+  const activeUsers  = users.filter(u => u.active !== false).length;
+  const mongoOK      = !!CONFIG.MONGO_URI;
+
   const rows = users.map(u => {
-    const s = stats[normalizeNumber(u.number)] || { count: 0, lastUsed: "—" };
+    const s   = stats[normalizeNumber(u.number)] || { count: 0, lastUsed: "—" };
+    const bal = u.balance || 0;
+    const lastUsed = s.lastUsed ? new Date(s.lastUsed).toLocaleString("en-BD", { timeZone: "Asia/Dhaka", hour12: true, dateStyle: "short", timeStyle: "short" }) : "—";
     return `<tr>
-      <td>${u.number}</td>
-      <td>${u.name || "—"}</td>
-      <td style="color:${(u.balance||0) < 0 ? 'red' : 'green'};font-weight:bold">${u.balance || 0} ৳</td>
-      <td>${u.active !== false ? "✅" : "❌"}</td>
-      <td>${s.count}</td>
-      <td style="font-size:11px">${s.lastUsed || "—"}</td>
+      <td style="font-weight:600">${u.number}</td>
+      <td>${u.name || "<span style='color:var(--muted)'>—</span>"}</td>
+      <td class="${bal >= 0 ? "bal-positive" : "bal-negative"}">${bal} ৳</td>
+      <td><span class="badge ${u.active !== false ? "badge-green" : "badge-red"}">${u.active !== false ? "Active" : "Off"}</span></td>
+      <td><span class="badge badge-blue">${s.count}</span></td>
+      <td style="color:var(--muted);font-size:12px">${lastUsed}</td>
       <td>
-        <form method="POST" action="/admin/recharge" style="display:inline;white-space:nowrap">
-          <input type="hidden" name="number" value="${u.number}"/>
-          <input name="amount" placeholder="টাকা" type="number" style="width:65px;padding:3px"/>
-          <button name="type" value="add" style="background:#28a745;color:#fff;border:0;padding:4px 8px;border-radius:3px;cursor:pointer">+Add</button>
-          <button name="type" value="remove" style="background:#dc3545;color:#fff;border:0;padding:4px 8px;border-radius:3px;cursor:pointer">-Remove</button>
-        </form>
-        <form method="POST" action="/admin/toggle" style="display:inline">
-          <input type="hidden" name="number" value="${u.number}"/>
-          <button style="padding:4px 8px;cursor:pointer">Toggle</button>
-        </form>
-        <form method="POST" action="/admin/delete" style="display:inline">
-          <input type="hidden" name="number" value="${u.number}"/>
-          <button onclick="return confirm('Delete?')" style="background:#dc3545;color:#fff;border:0;padding:4px 8px;border-radius:3px;cursor:pointer">🗑️</button>
-        </form>
+        <div class="action-row">
+          <form method="POST" action="/admin/recharge" style="display:flex;gap:4px;align-items:center">
+            <input type="hidden" name="number" value="${u.number}"/>
+            <input name="amount" type="number" placeholder="৳" style="width:60px;padding:5px 8px"/>
+            <button name="type" value="add"    class="btn btn-success" style="padding:5px 10px">+</button>
+            <button name="type" value="remove" class="btn btn-danger"  style="padding:5px 10px">−</button>
+          </form>
+          <form method="POST" action="/admin/toggle" style="display:inline">
+            <input type="hidden" name="number" value="${u.number}"/>
+            <button class="btn btn-ghost" style="padding:5px 10px">${u.active !== false ? "Disable" : "Enable"}</button>
+          </form>
+          <form method="POST" action="/admin/delete" style="display:inline">
+            <input type="hidden" name="number" value="${u.number}"/>
+            <button class="btn btn-danger" style="padding:5px 10px" onclick="return confirm('Delete ${u.number}?')">🗑</button>
+          </form>
+        </div>
       </td>
     </tr>`;
   }).join("");
 
-  const mongoStatus = CONFIG.MONGO_URI ? "✅ MongoDB" : "❌ MongoDB না (MONGO_URI set করুন)";
+  res.send(`<html><head>${ADMIN_CSS}<title>NID Bot Admin</title></head><body>
+  <div class="topbar">
+    <h1>📊 NID Bot Admin</h1>
+    <a href="/admin/logout">Logout</a>
+  </div>
+  <div class="wrap">
 
-  res.send(`<html><head><style>
-    body{font-family:sans-serif;max-width:1200px;margin:30px auto;padding:20px}
-    table{width:100%;border-collapse:collapse;margin:15px 0}
-    th,td{border:1px solid #ddd;padding:8px;text-align:left;font-size:13px}
-    th{background:#0078d4;color:#fff}
-    .card{background:#f9f9f9;padding:15px;margin:10px 0;border-radius:6px;border:1px solid #ddd}
-    button{padding:5px 10px;cursor:pointer}
-    .status{padding:8px 15px;border-radius:5px;background:#e8f5e9;border:1px solid #c8e6c9;font-size:13px;margin-bottom:10px}
-  </style></head><body>
-    <h1>📊 NID Bot Admin Panel</h1>
-    <div style="text-align:right"><a href="/admin/logout">Logout</a></div>
-    <div class="status">Backup: ${mongoStatus}</div>
-
-    <div class="card">
-      <h3>⚙️ Settings</h3>
-      <form method="POST" action="/admin/settings">
-        Card Price (৳): <input name="cardPrice" value="${settings.cardPrice || 0}" style="width:80px" type="number"/>
-        <button>Save</button>
-      </form>
+    <!-- Stats -->
+    <div class="stats-grid">
+      <div class="stat-card"><div class="label">Total Users</div><div class="value">${users.length}</div></div>
+      <div class="stat-card"><div class="label">Active Users</div><div class="value" style="color:var(--success)">${activeUsers}</div></div>
+      <div class="stat-card"><div class="label">Cards Made</div><div class="value" style="color:var(--warning)">${totalCards}</div></div>
+      <div class="stat-card"><div class="label">Total Balance</div><div class="value" style="color:var(--primary)">${totalBalance} ৳</div></div>
+      <div class="stat-card"><div class="label">Card Price</div><div class="value">${settings.cardPrice || 0} ৳</div></div>
     </div>
 
+    <div class="grid2">
+      <!-- Settings -->
+      <div class="card">
+        <h3>⚙️ Settings</h3>
+        <form method="POST" action="/admin/settings" class="form-row">
+          <label style="font-size:13px;font-weight:500">Card Price (৳)</label>
+          <input name="cardPrice" value="${settings.cardPrice || 0}" type="number" style="width:90px"/>
+          <button class="btn btn-primary">Save</button>
+        </form>
+      </div>
+
+      <!-- Backup -->
+      <div class="card">
+        <h3>☁️ Backup</h3>
+        <div class="form-row" style="align-items:center;gap:12px">
+          <span class="${mongoOK ? "mongo-ok" : "mongo-err"}">${mongoOK ? "✅ MongoDB Connected" : "❌ MongoDB না (MONGO_URI নেই)"}</span>
+          <form method="POST" action="/admin/backup">
+            <button class="btn btn-teal">Backup Now</button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add User -->
     <div class="card">
       <h3>➕ Add User</h3>
-      <form method="POST" action="/admin/add">
-        <input name="number" placeholder="WhatsApp Number (880...)" required/>
-        <input name="name" placeholder="Name"/>
-        <input name="balance" placeholder="Initial balance" value="0" type="number" style="width:100px"/>
-        <button>Add</button>
+      <form method="POST" action="/admin/add" class="form-row">
+        <input name="number"  placeholder="880XXXXXXXXXX" required/>
+        <input name="name"    placeholder="Name (optional)"/>
+        <input name="balance" placeholder="Balance (৳)" value="0" type="number" style="width:110px"/>
+        <button class="btn btn-primary">Add User</button>
       </form>
     </div>
 
-    <div class="card">
-      <form method="POST" action="/admin/backup" style="display:inline">
-        <button style="background:#17a2b8;color:#fff;border:0;padding:8px 16px;border-radius:4px;cursor:pointer">☁️ MongoDB Backup Now</button>
-      </form>
+    <!-- Users Table -->
+    <div class="section-title">👥 Users <span style="font-size:13px;color:var(--muted);font-weight:400">(${users.length})</span></div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <table>
+        <thead>
+          <tr>
+            <th>Number</th><th>Name</th><th>Balance</th><th>Status</th>
+            <th>Cards</th><th>Last Used</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>${rows || `<tr><td colspan="7" style="text-align:center;padding:30px;color:var(--muted)">কোনো user নেই</td></tr>`}</tbody>
+      </table>
     </div>
 
-    <h3>👥 Users (${users.length})</h3>
-    <table>
-      <tr><th>Number</th><th>Name</th><th>Balance</th><th>Active</th><th>Cards</th><th>Last Used</th><th>Actions</th></tr>
-      ${rows}
-    </table>
+  </div>
   </body></html>`);
 });
 
@@ -561,26 +646,19 @@ app.post("/admin/add", adminAuth, (req, res) => {
   const n = normalizeNumber(number);
   if (!users.find(u => normalizeNumber(u.number) === n)) {
     users.push({ number: n, name: name || "", balance: parseFloat(balance) || 0, active: true });
-    saveUsers(users);
-    backupData();
+    saveUsers(users); backupData();
   }
   res.redirect("/admin");
 });
 
-// ✅ Recharge — Add (+) এবং Remove (-) দুটোই
 app.post("/admin/recharge", adminAuth, (req, res) => {
-  const users  = getUsers();
+  const users = getUsers();
   const { number, amount, type } = req.body;
-  const i      = users.findIndex(u => normalizeNumber(u.number) === normalizeNumber(number));
-  const amt    = parseFloat(amount) || 0;
+  const i   = users.findIndex(u => normalizeNumber(u.number) === normalizeNumber(number));
+  const amt = parseFloat(amount) || 0;
   if (i !== -1 && amt > 0) {
-    if (type === "remove") {
-      users[i].balance = (users[i].balance || 0) - amt;
-    } else {
-      users[i].balance = (users[i].balance || 0) + amt;
-    }
-    saveUsers(users);
-    backupData(); // instant backup
+    users[i].balance = (users[i].balance || 0) + (type === "remove" ? -amt : amt);
+    saveUsers(users); backupData();
   }
   res.redirect("/admin");
 });
@@ -588,7 +666,10 @@ app.post("/admin/recharge", adminAuth, (req, res) => {
 app.post("/admin/toggle", adminAuth, (req, res) => {
   const users = getUsers();
   const i     = users.findIndex(u => normalizeNumber(u.number) === normalizeNumber(req.body.number));
-  if (i !== -1) { users[i].active = users[i].active === false; saveUsers(users); backupData(); }
+  if (i !== -1) {
+    users[i].active = users[i].active === false ? true : false;
+    saveUsers(users); backupData();
+  }
   res.redirect("/admin");
 });
 
@@ -609,22 +690,21 @@ app.post("/admin/backup", adminAuth, async (req, res) => {
   res.redirect("/admin");
 });
 
-// ========== STARTUP CLEANUP ==========
+// ========== CLEANUP ==========
 function cleanupOldFiles() {
   try {
     const tenMin = 10 * 60 * 1000;
     fs.readdirSync(CONFIG.STORAGE_DIR).forEach(f => {
       if (!f.endsWith(".html")) return;
-      const fp  = path.join(CONFIG.STORAGE_DIR, f);
-      const age = Date.now() - fs.statSync(fp).mtimeMs;
-      if (age > tenMin) { fs.unlinkSync(fp); console.log(`🗑️ Cleaned: ${f}`); }
+      const fp = path.join(CONFIG.STORAGE_DIR, f);
+      if (Date.now() - fs.statSync(fp).mtimeMs > tenMin) { fs.unlinkSync(fp); }
     });
-  } catch (e) {}
+  } catch {}
 }
 
 // ========== START ==========
 (async () => {
-  await restoreData(); // MongoDB থেকে data restore
+  await restoreData();
   cleanupOldFiles();
 
   app.listen(CONFIG.PORT, () => {
@@ -633,6 +713,5 @@ function cleanupOldFiles() {
     console.log(`🔐 Admin: ${CONFIG.BASE_URL}/admin`);
   });
 
-  // Self-ping
   setInterval(() => { axios.get(CONFIG.BASE_URL).catch(() => {}); }, 14 * 60 * 1000);
 })();
