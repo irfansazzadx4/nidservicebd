@@ -365,7 +365,7 @@ async function handleIncoming(msg, contact) {
 
       // ✅ PDF আলাদা document (caption ছাড়া)
       const safeName = (data.nameEnglish || data.nameBangla || "NID").replace(/[/\\?%*:|"<>]/g, "").trim();
-      const filename = `${data.nid} - ${safeName}.pdf`;
+      const filename = `nid-${data.nid}.pdf`;
       const mediaId  = await uploadMedia(pdfBuffer, filename, "application/pdf");
       await sendDocument(from, mediaId, filename);
 
