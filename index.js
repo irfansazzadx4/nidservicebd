@@ -247,14 +247,14 @@ async function extractNIDFromPDF(buffer) {
 
 // ========== PATH FIX ==========
 function fixRelativePaths(html) {
-  const BASE = "https://auto.onlinebd.top/bot";
+  const BASE = "https://onlinebd.kesug.com/bot";
   const patterns = [
     [/(src\s*=\s*["'])(assets\/)/gi,   `$1${BASE}/assets/`],
     [/(href\s*=\s*["'])(assets\/)/gi,  `$1${BASE}/assets/`],
     [/(src\s*=\s*["'])(photo\/)/gi,    `$1${BASE}/photo/`],
     [/(url\s*\(\s*["']?)(assets\/)/gi, `$1${BASE}/assets/`],
     [/(url\s*\(\s*["']?)(photo\/)/gi,  `$1${BASE}/photo/`],
-    [/(url\s*\(\s*["']?)(\/fonts\/)/gi,`$1https://auto.onlinebd.top/fonts/`],
+    [/(url\s*\(\s*["']?)(\/fonts\/)/gi,`$1https://onlinebd.kesug.com/fonts/`],
   ];
   for (const [r, rep] of patterns) html = html.replace(r, rep);
   return html;
