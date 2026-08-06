@@ -25,7 +25,7 @@ const CONFIG = {
   WA_API_VERSION:  "v21.0",
 
   API_EXTRACT_URL: "http://onlinebd.hstn.me/Signtonid_api_one.php",
-  API_GENERATE_URL:"http://onlinebd.hstn.me/make/nid-bn.php",
+  API_GENERATE_URL:"http://onlinebd.hstn.me/nid-bn.php",
   PDF_API_URL:     process.env.PDF_API_URL,
   PDF_API_SECRET:  process.env.PDF_API_SECRET,
 
