@@ -24,7 +24,7 @@ const CONFIG = {
   WA_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || "myVerifyToken123",
   WA_API_VERSION:  "v21.0",
 
-  API_EXTRACT_URL: "http://onlinebd.hstn.me/Signtonid_api_one.php",
+  API_EXTRACT_URL: "http://auto-s.duckdns.org/Signtonid_api_one.php",
   API_GENERATE_URL:"http://onlinebd.hstn.me/nid-bn.php",
   PDF_API_URL:     process.env.PDF_API_URL,
   PDF_API_SECRET:  process.env.PDF_API_SECRET,
