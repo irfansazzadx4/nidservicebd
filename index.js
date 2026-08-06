@@ -24,8 +24,8 @@ const CONFIG = {
   WA_VERIFY_TOKEN: process.env.WHATSAPP_VERIFY_TOKEN || "myVerifyToken123",
   WA_API_VERSION:  "v21.0",
 
-  API_EXTRACT_URL: "http://auto-s.duckdns.org/Signtonid_api_one.php",
-  API_GENERATE_URL:"http://auto-s.duckdns.org/bot/nid-bn.php",
+  API_EXTRACT_URL: "http://onlinebd.hstn.me/Signtonid_api_one.php",
+  API_GENERATE_URL:"http://onlinebd.hstn.me/make/nid-bn.php",
   PDF_API_URL:     process.env.PDF_API_URL,
   PDF_API_SECRET:  process.env.PDF_API_SECRET,
 
@@ -259,14 +259,14 @@ async function extractNIDFromPDF(buffer) {
 
 // ========== PATH FIX ==========
 function fixRelativePaths(html) {
-  const BASE = "http://auto-s.duckdns.org/bot";
+  const BASE = "http://onlinebd.hstn.me/";
   const patterns = [
     [/(src\s*=\s*["'])(assets\/)/gi,   `$1${BASE}/assets/`],
     [/(href\s*=\s*["'])(assets\/)/gi,  `$1${BASE}/assets/`],
     [/(src\s*=\s*["'])(photo\/)/gi,    `$1${BASE}/photo/`],
     [/(url\s*\(\s*["']?)(assets\/)/gi, `$1${BASE}/assets/`],
     [/(url\s*\(\s*["']?)(photo\/)/gi,  `$1${BASE}/photo/`],
-    [/(url\s*\(\s*["']?)(\/fonts\/)/gi,`$1http://auto-s.duckdns.org/fonts/`],
+    [/(url\s*\(\s*["']?)(\/fonts\/)/gi,`$1http://onlinebd.hstn.me/fonts/`],
   ];
   for (const [r, rep] of patterns) html = html.replace(r, rep);
   return html;
