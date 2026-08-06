@@ -3,6 +3,8 @@
  * ✅ Caption আলাদা text message, PDF আলাদা document
  * ✅ Arial + Bangla font via pdf-server
  * ✅ Pro Admin Panel UI
+ * ✅ PDF রিসিভ করলে ⏳ react, সফল হলে ✅ react, fail হলে ❌ react
+ * ✅ Balance শুধুমাত্র PDF successfully send হওয়ার পরেই কাটবে
  */
 
 const express = require("express");
@@ -173,6 +175,18 @@ async function markRead(messageId) {
   } catch {}
 }
 
+// ✅ NEW: message এ react করার helper (emoji: "" দিলে react সরিয়ে দেয়)
+async function sendReaction(to, messageId, emoji) {
+  try {
+    await axios.post(`${WA_BASE()}/messages`, {
+      messaging_product: "whatsapp",
+      to,
+      type: "reaction",
+      reaction: { message_id: messageId, emoji }
+    }, { headers: WA_HEADERS() });
+  } catch (e) { console.error("sendReaction error:", e.response?.data || e.message); }
+}
+
 async function uploadMedia(buffer, filename, mimetype) {
   const form = new FormData();
   form.append("messaging_product", "whatsapp");
@@ -187,12 +201,10 @@ async function uploadMedia(buffer, filename, mimetype) {
 
 // ✅ PDF শুধু document হিসেবে পাঠাও, caption ছাড়া
 async function sendDocument(to, mediaId, filename) {
-  try {
-    await axios.post(`${WA_BASE()}/messages`, {
-      messaging_product: "whatsapp", to, type: "document",
-      document: { id: mediaId, filename }
-    }, { headers: WA_HEADERS() });
-  } catch (e) { console.error("sendDocument error:", e.response?.data || e.message); }
+  await axios.post(`${WA_BASE()}/messages`, {
+    messaging_product: "whatsapp", to, type: "document",
+    document: { id: mediaId, filename }
+  }, { headers: WA_HEADERS() });
 }
 
 async function downloadMedia(mediaId) {
@@ -333,24 +345,31 @@ async function handleIncoming(msg, contact) {
       );
     }
 
-    await sendText(from, "⏳ আপনার NID PDF process হচ্ছে... একটু wait করুন।");
+    // ✅ "process হচ্ছে" text এর বদলে PDF message এ ⏳ react
+    await sendReaction(from, msgId, "⏳");
 
     try {
       const { buffer: pdfBuf } = await downloadMedia(doc.id);
       const data = await extractNIDFromPDF(pdfBuf);
       if (!data.nid) throw new Error("NID extract করতে পারিনি");
 
-      if (price > 0) deductBalance(from);
-
       const [htmlUrl, pdfBuffer] = await Promise.all([
         buildAndSaveHTML(data),
         generatePDF(data),
       ]);
 
+      // ✅ PDF আগে পাঠাও, উপরের কোনো ধাপে balance এখনো কাটা হয়নি
+      const filename = `nid-${data.nid}.pdf`;
+      const mediaId   = await uploadMedia(pdfBuffer, filename, "application/pdf");
+      await sendDocument(from, mediaId, filename);
+
+      // ✅ PDF সফলভাবে পাঠানোর পরেই balance কাটা হবে
+      if (price > 0) deductBalance(from);
+
       recordStat(from);
       backupData();
 
-      // ✅ Caption আলাদা text message
+      // ✅ Caption আলাদা text message (PDF এর পরে)
       const captionLines = [
         `✅ আপনার NID Card তৈরি হয়েছে!`,
         ``,
@@ -363,14 +382,13 @@ async function handleIncoming(msg, contact) {
 
       await sendText(from, captionLines);
 
-      // ✅ PDF আলাদা document (caption ছাড়া)
-      const safeName = (data.nameEnglish || data.nameBangla || "NID").replace(/[/\\?%*:|"<>]/g, "").trim();
-      const filename = `nid-${data.nid}.pdf`;
-      const mediaId  = await uploadMedia(pdfBuffer, filename, "application/pdf");
-      await sendDocument(from, mediaId, filename);
+      // ✅ সব সফল হলে ⏳ এর জায়গায় ✅ react
+      await sendReaction(from, msgId, "✅");
 
     } catch (err) {
       console.error("Process error:", err.message);
+      // ❌ কোনো ধাপে error হলে balance অক্ষত থাকবে (উপরে deductBalance PDF send success এর পরেই কল হয়)
+      await sendReaction(from, msgId, "❌");
       await sendText(from, `❌ Error: ${err.message}\nআবার চেষ্টা করুন বা admin কে জানান।`);
     }
   }
