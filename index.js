@@ -5,6 +5,9 @@
  * ✅ Pro Admin Panel UI
  * ✅ PDF রিসিভ করলে ⏳ react, সফল হলে ✅ react, fail হলে ❌ react
  * ✅ Balance শুধুমাত্র PDF successfully send হওয়ার পরেই কাটবে
+ * ✅ Per-user custom price (না থাকলে global default price)
+ * ✅ Admin panel থেকে সব active user কে broadcast message
+ * ✅ HTML print link আর user কে পাঠানো হয় না (শুধু PDF + caption)
  */
 
 const express = require("express");
@@ -73,9 +76,16 @@ function getUserBalance(number) {
   return u ? (u.balance || 0) : 0;
 }
 
+// ✅ NEW: প্রতিটা user এর জন্য নিজস্ব price (না থাকলে global default price)
+function getCardPriceForUser(number) {
+  const u = getUsers().find(x => normalizeNumber(x.number) === normalizeNumber(number));
+  if (u && u.price !== undefined && u.price !== null && u.price !== "") return u.price;
+  return getSettings().cardPrice || 0;
+}
+
 function deductBalance(number) {
   const users = getUsers();
-  const price = getSettings().cardPrice || 0;
+  const price = getCardPriceForUser(number); // ✅ per-user price ব্যবহার হচ্ছে
   const idx   = users.findIndex(x => normalizeNumber(x.number) === normalizeNumber(number));
   if (idx === -1) return false;
   if ((users[idx].balance || 0) < price) return false;
@@ -175,7 +185,7 @@ async function markRead(messageId) {
   } catch {}
 }
 
-// ✅ NEW: message এ react করার helper (emoji: "" দিলে react সরিয়ে দেয়)
+// ✅ message এ react করার helper (emoji: "" দিলে react সরিয়ে দেয়)
 async function sendReaction(to, messageId, emoji) {
   try {
     await axios.post(`${WA_BASE()}/messages`, {
@@ -282,6 +292,8 @@ async function fetchHTMLFromData(data) {
   return fixRelativePaths(res.data);
 }
 
+// (এই ফাংশনটা আর processing flow-তে কল করা হয় না — user কে আর html print link পাঠানো হয় না।
+// প্রয়োজনে ভবিষ্যতে ব্যবহার করার জন্য রাখা হলো, চাইলে সম্পূর্ণ মুছেও ফেলতে পারেন।)
 async function buildAndSaveHTML(data) {
   const html     = await fetchHTMLFromData(data);
   const filename = `nid_${data.nid || Date.now()}_${Date.now()}.html`;
@@ -318,7 +330,7 @@ async function handleIncoming(msg, contact) {
     if (text === ".status" || text === "status") {
       if (!isAllowed(from)) return sendText(from, "❌ আপনি authorized নন।");
       const bal   = getUserBalance(from);
-      const price = getSettings().cardPrice || 0;
+      const price = getCardPriceForUser(from); // ✅ per-user price
       return sendText(from,
         `✅ আপনি authorized।\n💰 Balance: ${bal} টাকা\n💳 Card Price: ${price} টাকা`
       );
@@ -338,7 +350,7 @@ async function handleIncoming(msg, contact) {
       return sendText(from, "❌ আপনি authorized নন। Admin এর সাথে যোগাযোগ করুন।");
     }
 
-    const price = getSettings().cardPrice || 0;
+    const price = getCardPriceForUser(from); // ✅ per-user price
     if (price > 0 && getUserBalance(from) < price) {
       return sendText(from,
         `❌ Balance কম! কমপক্ষে ${price} টাকা থাকতে হবে।\nCurrent balance: ${getUserBalance(from)} টাকা`
@@ -353,10 +365,8 @@ async function handleIncoming(msg, contact) {
       const data = await extractNIDFromPDF(pdfBuf);
       if (!data.nid) throw new Error("NID extract করতে পারিনি");
 
-      const [htmlUrl, pdfBuffer] = await Promise.all([
-        buildAndSaveHTML(data),
-        generatePDF(data),
-      ]);
+      // ✅ শুধু PDF জেনারেট হবে, HTML print link আর বানানো/পাঠানো হবে না
+      const pdfBuffer = await generatePDF(data);
 
       // ✅ PDF আগে পাঠাও, উপরের কোনো ধাপে balance এখনো কাটা হয়নি
       const filename = `nid-${data.nid}.pdf`;
@@ -369,7 +379,7 @@ async function handleIncoming(msg, contact) {
       recordStat(from);
       backupData();
 
-      // ✅ Caption আলাদা text message (PDF এর পরে)
+      // ✅ Caption আলাদা text message (PDF এর পরে) — HTML link ছাড়া
       const captionLines = [
         `✅ আপনার NID Card তৈরি হয়েছে!`,
         ``,
@@ -377,7 +387,6 @@ async function handleIncoming(msg, contact) {
         `🆔 NID: ${data.nid}`,
         `🎂 DOB: ${data.dob}`,
         price > 0 ? `💰 Remaining Balance: ${getUserBalance(from)} টাকা` : "",
-        `🖨️ Print করতে (১০ মিনিট): ${htmlUrl}`,
       ].filter(Boolean).join("\n");
 
       await sendText(from, captionLines);
@@ -465,11 +474,11 @@ const ADMIN_CSS = `
   .card { background: var(--card); border-radius: 12px; padding: 20px 24px; box-shadow: 0 1px 3px rgba(0,0,0,.07); border: 1px solid var(--border); margin-bottom: 16px; }
   .card h3 { font-size: 14px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 14px; }
   .form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  input[type=text], input[type=password], input[type=number], select {
+  input[type=text], input[type=password], input[type=number], select, textarea {
     border: 1.5px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; color: var(--text);
-    background: #fff; outline: none; transition: border .2s;
+    background: #fff; outline: none; transition: border .2s; font-family: inherit;
   }
-  input:focus, select:focus { border-color: var(--primary); }
+  input:focus, select:focus, textarea:focus { border-color: var(--primary); }
   input[placeholder] { min-width: 160px; }
   .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border: 0; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .2s; }
   .btn-primary { background: var(--primary); color: #fff; }
@@ -505,6 +514,7 @@ const ADMIN_CSS = `
   .login-box h2 { font-size: 22px; font-weight: 700; margin-bottom: 24px; color: var(--text); }
   .login-box input { width: 100%; margin-bottom: 12px; }
   .login-box .btn { width: 100%; justify-content: center; padding: 10px; font-size: 15px; }
+  textarea { width: 100%; resize: vertical; }
 </style>`;
 
 app.get("/admin/login", (_, res) => {
@@ -577,6 +587,11 @@ app.get("/admin", adminAuth, (req, res) => {
             <button name="type" value="add"    class="btn btn-success" style="padding:5px 10px">+</button>
             <button name="type" value="remove" class="btn btn-danger"  style="padding:5px 10px">−</button>
           </form>
+          <form method="POST" action="/admin/setprice" style="display:flex;gap:4px;align-items:center">
+            <input type="hidden" name="number" value="${u.number}"/>
+            <input name="price" type="number" placeholder="Custom ৳" value="${u.price ?? ''}" style="width:90px;padding:5px 8px"/>
+            <button class="btn btn-warning" style="padding:5px 10px">Set Price</button>
+          </form>
           <form method="POST" action="/admin/toggle" style="display:inline">
             <input type="hidden" name="number" value="${u.number}"/>
             <button class="btn btn-ghost" style="padding:5px 10px">${u.active !== false ? "Disable" : "Enable"}</button>
@@ -603,18 +618,19 @@ app.get("/admin", adminAuth, (req, res) => {
       <div class="stat-card"><div class="label">Active Users</div><div class="value" style="color:var(--success)">${activeUsers}</div></div>
       <div class="stat-card"><div class="label">Cards Made</div><div class="value" style="color:var(--warning)">${totalCards}</div></div>
       <div class="stat-card"><div class="label">Total Balance</div><div class="value" style="color:var(--primary)">${totalBalance} ৳</div></div>
-      <div class="stat-card"><div class="label">Card Price</div><div class="value">${settings.cardPrice || 0} ৳</div></div>
+      <div class="stat-card"><div class="label">Default Card Price</div><div class="value">${settings.cardPrice || 0} ৳</div></div>
     </div>
 
     <div class="grid2">
       <!-- Settings -->
       <div class="card">
-        <h3>⚙️ Settings</h3>
+        <h3>⚙️ Default Settings</h3>
         <form method="POST" action="/admin/settings" class="form-row">
-          <label style="font-size:13px;font-weight:500">Card Price (৳)</label>
+          <label style="font-size:13px;font-weight:500">Default Card Price (৳)</label>
           <input name="cardPrice" value="${settings.cardPrice || 0}" type="number" style="width:90px"/>
           <button class="btn btn-primary">Save</button>
         </form>
+        <p style="font-size:12px;color:var(--muted);margin-top:8px">যেসব user এর Custom Price সেট করা নেই, তারা এই default price ব্যবহার করবে।</p>
       </div>
 
       <!-- Backup -->
@@ -629,6 +645,17 @@ app.get("/admin", adminAuth, (req, res) => {
       </div>
     </div>
 
+    <!-- Broadcast -->
+    <div class="card">
+      <h3>📢 Broadcast Message (সব active user কে)</h3>
+      <form method="POST" action="/admin/broadcast">
+        <textarea name="message" rows="3" required
+          placeholder="যেমন: ✅ Bot On করা হয়েছে, এখন থেকে NID Card বানাতে পারবেন।"
+          style="margin-bottom:10px"></textarea>
+        <button class="btn btn-primary">📤 সবাইকে পাঠান</button>
+      </form>
+    </div>
+
     <!-- Add User -->
     <div class="card">
       <h3>➕ Add User</h3>
@@ -636,6 +663,7 @@ app.get("/admin", adminAuth, (req, res) => {
         <input name="number"  placeholder="880XXXXXXXXXX" required/>
         <input name="name"    placeholder="Name (optional)"/>
         <input name="balance" placeholder="Balance (৳)" value="0" type="number" style="width:110px"/>
+        <input name="price"   placeholder="Custom Price (blank=default)" type="number" style="width:190px"/>
         <button class="btn btn-primary">Add User</button>
       </form>
     </div>
@@ -660,10 +688,12 @@ app.get("/admin", adminAuth, (req, res) => {
 
 app.post("/admin/add", adminAuth, (req, res) => {
   const users = getUsers();
-  const { number, name, balance } = req.body;
+  const { number, name, balance, price } = req.body;
   const n = normalizeNumber(number);
   if (!users.find(u => normalizeNumber(u.number) === n)) {
-    users.push({ number: n, name: name || "", balance: parseFloat(balance) || 0, active: true });
+    const newUser = { number: n, name: name || "", balance: parseFloat(balance) || 0, active: true };
+    if (price !== undefined && price !== "") newUser.price = parseFloat(price); // ✅ custom price (দিলে)
+    users.push(newUser);
     saveUsers(users); backupData();
   }
   res.redirect("/admin");
@@ -676,6 +706,19 @@ app.post("/admin/recharge", adminAuth, (req, res) => {
   const amt = parseFloat(amount) || 0;
   if (i !== -1 && amt > 0) {
     users[i].balance = (users[i].balance || 0) + (type === "remove" ? -amt : amt);
+    saveUsers(users); backupData();
+  }
+  res.redirect("/admin");
+});
+
+// ✅ NEW: প্রতিটা user এর জন্য আলাদা price সেট/আপডেট/রিমুভ করার route
+app.post("/admin/setprice", adminAuth, (req, res) => {
+  const users = getUsers();
+  const i = users.findIndex(u => normalizeNumber(u.number) === normalizeNumber(req.body.number));
+  if (i !== -1) {
+    const p = req.body.price;
+    if (p === "" || p === undefined) delete users[i].price; // খালি রেখে Set দিলে আবার default price এ ফিরে যাবে
+    else users[i].price = parseFloat(p);
     saveUsers(users); backupData();
   }
   res.redirect("/admin");
@@ -706,6 +749,26 @@ app.post("/admin/settings", adminAuth, (req, res) => {
 app.post("/admin/backup", adminAuth, async (req, res) => {
   await backupData();
   res.redirect("/admin");
+});
+
+// ✅ NEW: সব active user কে broadcast message পাঠানো
+app.post("/admin/broadcast", adminAuth, async (req, res) => {
+  const message = (req.body.message || "").trim();
+  if (!message) return res.redirect("/admin");
+
+  // সাথে সাথে admin panel কে response দিয়ে দিচ্ছি, ব্যাকগ্রাউন্ডে ধীরে ধীরে সবাইকে পাঠানো হবে
+  res.redirect("/admin");
+
+  const users = getUsers().filter(u => u.active !== false); // শুধু active user দের কাছে যাবে
+  (async () => {
+    let sent = 0;
+    for (const u of users) {
+      await sendText(normalizeNumber(u.number), message);
+      sent++;
+      await new Promise(r => setTimeout(r, 300)); // WhatsApp rate-limit এড়াতে ছোট গ্যাপ
+    }
+    console.log(`✅ Broadcast sent to ${sent}/${users.length} users`);
+  })();
 });
 
 // ========== CLEANUP ==========
