@@ -5,7 +5,7 @@
  * ✅ Pro Admin Panel UI
  * ✅ PDF রিসিভ করলে ⏳ react, সফল হলে ✅ react, fail হলে ❌ react
  * ✅ Balance শুধুমাত্র PDF successfully send হওয়ার পরেই কাটবে
- * ✅ Per-user custom  price (না থাকলে global default price)
+ * ✅ Per-user custom price (না থাকলে global default price)
  * ✅ Admin panel থেকে সব active user কে broadcast message
  * ✅ HTML print link আর user কে পাঠানো হয় না (শুধু PDF + caption)
  */
