@@ -76,7 +76,7 @@ function getUserBalance(number) {
   return u ? (u.balance || 0) : 0;
 }
 
-// ✅ NEW: প্রতিটা user এর জন্য নিজস্ব price (না থাকলে global default price)
+// ✅ প্রতিটা user এর জন্য নিজস্ব price (না থাকলে global default price)
 function getCardPriceForUser(number) {
   const u = getUsers().find(x => normalizeNumber(x.number) === normalizeNumber(number));
   if (u && u.price !== undefined && u.price !== null && u.price !== "") return u.price;
@@ -85,7 +85,7 @@ function getCardPriceForUser(number) {
 
 function deductBalance(number) {
   const users = getUsers();
-  const price = getCardPriceForUser(number); // ✅ per-user price ব্যবহার হচ্ছে
+  const price = getCardPriceForUser(number);
   const idx   = users.findIndex(x => normalizeNumber(x.number) === normalizeNumber(number));
   if (idx === -1) return false;
   if ((users[idx].balance || 0) < price) return false;
@@ -185,7 +185,6 @@ async function markRead(messageId) {
   } catch {}
 }
 
-// ✅ message এ react করার helper (emoji: "" দিলে react সরিয়ে দেয়)
 async function sendReaction(to, messageId, emoji) {
   try {
     await axios.post(`${WA_BASE()}/messages`, {
@@ -209,7 +208,6 @@ async function uploadMedia(buffer, filename, mimetype) {
   return res.data.id;
 }
 
-// ✅ PDF শুধু document হিসেবে পাঠাও, caption ছাড়া
 async function sendDocument(to, mediaId, filename) {
   await axios.post(`${WA_BASE()}/messages`, {
     messaging_product: "whatsapp", to, type: "document",
@@ -257,12 +255,13 @@ async function extractNIDFromPDF(buffer) {
       headers: form.getHeaders(),
       maxContentLength: Infinity, maxBodyLength: Infinity, timeout: 60000,
     });
-    console.log("📦 API Response:", JSON.stringify(res.data).slice(0, 200));
+    console.log("📦 Extract API response status:", res.status);
+    console.log("📦 Extract API response (first 200 chars):", JSON.stringify(res.data).slice(0, 200));
     const raw    = res.data?.data ? res.data.data : res.data;
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
     return mapAPIData(parsed);
   } catch (err) {
-    console.error("❌ Extract API failed:", err.response?.status, err.message);
+    console.error("❌ Extract API failed:", err.response?.status, err.response?.data || err.message);
     throw new Error("Extract API: " + (err.response?.data?.message || err.message));
   }
 }
@@ -293,7 +292,7 @@ async function fetchHTMLFromData(data) {
 }
 
 // (এই ফাংশনটা আর processing flow-তে কল করা হয় না — user কে আর html print link পাঠানো হয় না।
-// প্রয়োজনে ভবিষ্যতে ব্যবহার করার জন্য রাখা হলো, চাইলে সম্পূর্ণ মুছেও ফেলতে পারেন।)
+// প্রয়োজন হলে ভবিষ্যতে ব্যবহার করার জন্য রাখা হলো, চাইলে সম্পূর্ণ মুছেও ফেলতে পারেন।)
 async function buildAndSaveHTML(data) {
   const html     = await fetchHTMLFromData(data);
   const filename = `nid_${data.nid || Date.now()}_${Date.now()}.html`;
@@ -304,14 +303,32 @@ async function buildAndSaveHTML(data) {
 }
 
 async function generatePDF(data) {
-  const html = await fetchHTMLFromData(data);
-  // Font embed pdf-server এ হয়, এখানে plain HTML পাঠাও
-  const res = await axios.post(`${CONFIG.PDF_API_URL}/pdf`, {
-    secret: CONFIG.PDF_API_SECRET,
-    html,
-  }, { timeout: 90000 });
-  const base64 = res.data.pdf || res.data.base64 || res.data;
-  return Buffer.from(base64, "base64");
+  // Step 1: Generate HTML
+  let html;
+  try {
+    html = await fetchHTMLFromData(data);
+    console.log("✅ HTML generated successfully (length:", html.length, "chars)");
+  } catch (err) {
+    console.error("❌ HTML generation error:", err.response?.status, err.response?.data || err.message);
+    throw new Error("HTML generation failed: " + (err.response?.data?.message || err.message));
+  }
+
+  // Step 2: Convert HTML to PDF via pdf-server
+  try {
+    const res = await axios.post(`${CONFIG.PDF_API_URL}/pdf`, {
+      secret: CONFIG.PDF_API_SECRET,
+      html,
+    }, { timeout: 90000 });
+    console.log("✅ PDF API response status:", res.status);
+    const base64 = res.data.pdf || res.data.base64 || res.data;
+    if (!base64) {
+      throw new Error("PDF API returned no pdf/base64 field");
+    }
+    return Buffer.from(base64, "base64");
+  } catch (err) {
+    console.error("❌ PDF API error:", err.response?.status, err.response?.data || err.message);
+    throw new Error("PDF API failed: " + (err.response?.data?.message || err.message));
+  }
 }
 
 // ========== MESSAGE HANDLER ==========
@@ -330,7 +347,7 @@ async function handleIncoming(msg, contact) {
     if (text === ".status" || text === "status") {
       if (!isAllowed(from)) return sendText(from, "❌ আপনি authorized নন।");
       const bal   = getUserBalance(from);
-      const price = getCardPriceForUser(from); // ✅ per-user price
+      const price = getCardPriceForUser(from);
       return sendText(from,
         `✅ আপনি authorized।\n💰 Balance: ${bal} টাকা\n💳 Card Price: ${price} টাকা`
       );
@@ -350,36 +367,69 @@ async function handleIncoming(msg, contact) {
       return sendText(from, "❌ আপনি authorized নন। Admin এর সাথে যোগাযোগ করুন।");
     }
 
-    const price = getCardPriceForUser(from); // ✅ per-user price
+    const price = getCardPriceForUser(from);
     if (price > 0 && getUserBalance(from) < price) {
       return sendText(from,
         `❌ Balance কম! কমপক্ষে ${price} টাকা থাকতে হবে।\nCurrent balance: ${getUserBalance(from)} টাকা`
       );
     }
 
-    // ✅ "process হচ্ছে" text এর বদলে PDF message এ ⏳ react
+    // ⏳ React
     await sendReaction(from, msgId, "⏳");
 
     try {
+      // --- Step 1: Download Media ---
+      console.log(`📥 Downloading media for ${from}`);
       const { buffer: pdfBuf } = await downloadMedia(doc.id);
-      const data = await extractNIDFromPDF(pdfBuf);
-      if (!data.nid) throw new Error("NID extract করতে পারিনি");
 
-      // ✅ শুধু PDF জেনারেট হবে, HTML print link আর বানানো/পাঠানো হবে না
-      const pdfBuffer = await generatePDF(data);
+      // --- Step 2: Extract NID from PDF ---
+      console.log(`🔍 Extracting NID for ${from}`);
+      let data;
+      try {
+        data = await extractNIDFromPDF(pdfBuf);
+        console.log(`✅ Extraction successful for ${from}, NID: ${data.nid}`);
+      } catch (err) {
+        console.error(`❌ Extraction error for ${from}:`, err.message);
+        throw new Error("Extract API failed: " + err.message);
+      }
 
-      // ✅ PDF আগে পাঠাও, উপরের কোনো ধাপে balance এখনো কাটা হয়নি
+      if (!data.nid) {
+        console.error(`❌ No NID found in extracted data for ${from}`);
+        throw new Error("NID extract করতে পারিনি");
+      }
+
+      // --- Step 3: Generate PDF ---
+      console.log(`📄 Generating PDF for ${from} (NID: ${data.nid})`);
+      let pdfBuffer;
+      try {
+        pdfBuffer = await generatePDF(data);
+        console.log(`✅ PDF generated successfully for ${from}, size: ${pdfBuffer.length} bytes`);
+      } catch (err) {
+        console.error(`❌ PDF generation error for ${from}:`, err.message);
+        throw new Error("PDF generation failed: " + err.message);
+      }
+
+      // --- Step 4: Upload and send PDF ---
+      console.log(`📤 Sending PDF to ${from}`);
       const filename = `nid-${data.nid}.pdf`;
-      const mediaId   = await uploadMedia(pdfBuffer, filename, "application/pdf");
+      const mediaId = await uploadMedia(pdfBuffer, filename, "application/pdf");
       await sendDocument(from, mediaId, filename);
+      console.log(`✅ PDF sent to ${from}`);
 
-      // ✅ PDF সফলভাবে পাঠানোর পরেই balance কাটা হবে
-      if (price > 0) deductBalance(from);
+      // --- Step 5: Deduct balance (only after successful send) ---
+      if (price > 0) {
+        const deducted = deductBalance(from);
+        if (!deducted) {
+          console.warn(`⚠️ Balance deduction failed for ${from} (insufficient?)`);
+        } else {
+          console.log(`💰 Balance deducted for ${from}, remaining: ${getUserBalance(from)}`);
+        }
+      }
 
       recordStat(from);
       backupData();
 
-      // ✅ Caption আলাদা text message (PDF এর পরে) — HTML link ছাড়া
+      // --- Step 6: Send caption as separate text (without HTML link) ---
       const captionLines = [
         `✅ আপনার NID Card তৈরি হয়েছে!`,
         ``,
@@ -391,12 +441,12 @@ async function handleIncoming(msg, contact) {
 
       await sendText(from, captionLines);
 
-      // ✅ সব সফল হলে ⏳ এর জায়গায় ✅ react
+      // ✅ Success reaction
       await sendReaction(from, msgId, "✅");
 
     } catch (err) {
-      console.error("Process error:", err.message);
-      // ❌ কোনো ধাপে error হলে balance অক্ষত থাকবে (উপরে deductBalance PDF send success এর পরেই কল হয়)
+      console.error(`❌ Process error for ${from}:`, err.message);
+      // ❌ কোনো ধাপে error হলে balance অক্ষত থাকবে
       await sendReaction(from, msgId, "❌");
       await sendText(from, `❌ Error: ${err.message}\nআবার চেষ্টা করুন বা admin কে জানান।`);
     }
@@ -692,7 +742,7 @@ app.post("/admin/add", adminAuth, (req, res) => {
   const n = normalizeNumber(number);
   if (!users.find(u => normalizeNumber(u.number) === n)) {
     const newUser = { number: n, name: name || "", balance: parseFloat(balance) || 0, active: true };
-    if (price !== undefined && price !== "") newUser.price = parseFloat(price); // ✅ custom price (দিলে)
+    if (price !== undefined && price !== "") newUser.price = parseFloat(price);
     users.push(newUser);
     saveUsers(users); backupData();
   }
@@ -711,13 +761,12 @@ app.post("/admin/recharge", adminAuth, (req, res) => {
   res.redirect("/admin");
 });
 
-// ✅ NEW: প্রতিটা user এর জন্য আলাদা price সেট/আপডেট/রিমুভ করার route
 app.post("/admin/setprice", adminAuth, (req, res) => {
   const users = getUsers();
   const i = users.findIndex(u => normalizeNumber(u.number) === normalizeNumber(req.body.number));
   if (i !== -1) {
     const p = req.body.price;
-    if (p === "" || p === undefined) delete users[i].price; // খালি রেখে Set দিলে আবার default price এ ফিরে যাবে
+    if (p === "" || p === undefined) delete users[i].price;
     else users[i].price = parseFloat(p);
     saveUsers(users); backupData();
   }
@@ -751,21 +800,19 @@ app.post("/admin/backup", adminAuth, async (req, res) => {
   res.redirect("/admin");
 });
 
-// ✅ NEW: সব active user কে broadcast message পাঠানো
 app.post("/admin/broadcast", adminAuth, async (req, res) => {
   const message = (req.body.message || "").trim();
   if (!message) return res.redirect("/admin");
 
-  // সাথে সাথে admin panel কে response দিয়ে দিচ্ছি, ব্যাকগ্রাউন্ডে ধীরে ধীরে সবাইকে পাঠানো হবে
   res.redirect("/admin");
 
-  const users = getUsers().filter(u => u.active !== false); // শুধু active user দের কাছে যাবে
+  const users = getUsers().filter(u => u.active !== false);
   (async () => {
     let sent = 0;
     for (const u of users) {
       await sendText(normalizeNumber(u.number), message);
       sent++;
-      await new Promise(r => setTimeout(r, 300)); // WhatsApp rate-limit এড়াতে ছোট গ্যাপ
+      await new Promise(r => setTimeout(r, 300));
     }
     console.log(`✅ Broadcast sent to ${sent}/${users.length} users`);
   })();
